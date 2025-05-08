@@ -1,0 +1,88 @@
+use std::ffi::CStr;
+use std::os::raw::c_char;
+use std::sync::Mutex;
+
+#[cfg_attr(windows, path = "windows.rs")]
+#[cfg_attr(unix, path = "unix.rs")]
+mod platform;
+use platform::{disable_input, enable_input, get_jagrenderview, is_input_enabled, Injector};
+
+// Pascal types as tuples (name, definition)
+const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
+
+// Pascal exports as (name, declaration)
+//name as to match the dll function name exactly
+const PASCAL_EXPORTS: &[(&str, &str)] = &[
+    (
+        "Inject",
+        "function Inject(dll: String; pid: UInt32): Boolean;",
+    ),
+    ("IsInputEnabled", "function IsInputEnabled(): Boolean;"),
+    ("EnableInput", "function EnableInput(): Boolean;"),
+    ("DisableInput", "function DisableInput(): Boolean;"),
+];
+
+lazy_static::lazy_static! {
+    static ref PROCESS_PID: Mutex<Option<u32>> = Mutex::new(None);
+    static ref WINDOW_HWND: Mutex<Option<u64>> = Mutex::new(None);
+}
+
+// dll functions
+#[no_mangle]
+pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
+    if path.is_null() {
+        println!("Invalid string\n");
+        return false;
+    }
+
+    let module_path = unsafe {
+        match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Invalid UTF-8\n");
+                return false;
+            }
+        }
+    };
+
+    *PROCESS_PID.lock().unwrap() = Some(pid);
+    match get_jagrenderview(pid) {
+        Some(hwnd) => *WINDOW_HWND.lock().unwrap() = Some(hwnd.0 as u64),
+        None => {
+            println!("Couldn't find JagRenderView HWND\n");
+            return false;
+        }
+    };
+
+    Injector::inject(module_path, pid)
+}
+
+#[no_mangle]
+pub extern "C" fn IsInputEnabled() -> bool {
+    let hwnd = WINDOW_HWND.lock().unwrap();
+    match *hwnd {
+        Some(h) => is_input_enabled(h),
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn EnableInput() -> bool {
+    let hwnd = WINDOW_HWND.lock().unwrap();
+    match *hwnd {
+        Some(h) => enable_input(h),
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn DisableInput() -> bool {
+    let hwnd = WINDOW_HWND.lock().unwrap();
+    match *hwnd {
+        Some(h) => disable_input(h),
+        None => false,
+    }
+}
+
+mod plugin;
+mod target;
