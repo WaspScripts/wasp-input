@@ -243,7 +243,7 @@ pub fn disable_input(hwnd: u64) -> bool {
     unsafe { EnableWindow(HWND(hwnd as *mut c_void), false).as_bool() }
 }
 
-pub fn key_down_msg(hwnd: u64, vkey: i32) {
+pub fn key_down(hwnd: u64, vkey: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
     unsafe {
         let _ = PostMessageW(
@@ -253,38 +253,6 @@ pub fn key_down_msg(hwnd: u64, vkey: i32) {
             LPARAM(0x001E0001),
         );
     }
-}
-
-pub fn key_up_msg(hwnd: u64, vkey: i32) {
-    let hwnd = HWND(hwnd as *mut c_void);
-    unsafe {
-        let _ = PostMessageW(
-            Some(hwnd),
-            WM_KEYUP,
-            WPARAM(vkey as usize),
-            LPARAM(0xC01E0001),
-        );
-    }
-}
-
-pub fn key_down(hwnd: u64, vkey: i32) {
-    let hwnd = HWND(hwnd as *mut c_void);
-    let mut inputs: [INPUT; 1] = [INPUT::default(); 1];
-
-    // KEY DOWN
-    inputs[0].r#type = INPUT_KEYBOARD;
-    inputs[0].Anonymous.ki = KEYBDINPUT {
-        wVk: VIRTUAL_KEY(vkey.try_into().unwrap()),
-        wScan: 0,
-        dwFlags: KEYBD_EVENT_FLAGS(0),
-        time: 0,
-        dwExtraInfo: 0,
-    };
-
-    let num_inputs = inputs.len() as u32;
-    let cb_size = size_of::<INPUT>() as i32;
-
-    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
 }
 
 pub fn key_up(hwnd: u64, vkey: i32) {
