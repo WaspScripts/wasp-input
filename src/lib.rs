@@ -5,9 +5,7 @@ use std::sync::Mutex;
 #[cfg_attr(windows, path = "windows.rs")]
 #[cfg_attr(unix, path = "unix.rs")]
 mod platform;
-use platform::{
-    disable_input, enable_input, get_jagrenderview, hook_wndproc, is_input_enabled, Injector,
-};
+use platform::{get_jagrenderview, hook_wndproc, is_input_enabled, toggle_input, Injector};
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
@@ -19,9 +17,11 @@ const PASCAL_EXPORTS: &[(&str, &str)] = &[
         "Inject",
         "function Inject(dll: String; pid: UInt32): Boolean;",
     ),
-    ("IsInputEnabled", "function IsInputEnabled(): Boolean;"),
-    ("EnableInput", "function EnableInput(): Boolean;"),
-    ("DisableInput", "function DisableInput(): Boolean;"),
+    ("GetInputState", "function GetInputState(): Boolean;"),
+    (
+        "SetInputState",
+        "function SetInputState(state: Boolean): Boolean;",
+    ),
 ];
 
 lazy_static::lazy_static! {
@@ -65,7 +65,7 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn IsInputEnabled() -> bool {
+pub extern "C" fn GetInputState() -> bool {
     let hwnd = WINDOW_HWND.lock().unwrap();
     match *hwnd {
         Some(h) => is_input_enabled(h),
@@ -74,19 +74,10 @@ pub extern "C" fn IsInputEnabled() -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn EnableInput() -> bool {
+pub extern "C" fn SetInputState(state: bool) -> bool {
     let hwnd = WINDOW_HWND.lock().unwrap();
     match *hwnd {
-        Some(h) => enable_input(h),
-        None => false,
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn DisableInput() -> bool {
-    let hwnd = WINDOW_HWND.lock().unwrap();
-    match *hwnd {
-        Some(h) => disable_input(h),
+        Some(h) => toggle_input(h, state),
         None => false,
     }
 }

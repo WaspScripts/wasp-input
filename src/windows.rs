@@ -24,8 +24,8 @@ use windows::{
             Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
             WindowsAndMessaging::{
                 CallWindowProcW, DefWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW,
-                GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, PostMessageW,
-                SetWindowLongPtrW, GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_USER, WNDPROC,
+                GetWindowRect, GetWindowThreadProcessId, PostMessageW, SetWindowLongPtrW,
+                GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_USER, WNDPROC,
             },
         },
     },
@@ -232,7 +232,7 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
 
 static ORIGINAL_WNDPROC: Mutex<Option<WNDPROC>> = Mutex::new(None);
 
-unsafe extern "system" fn wndproc_hook(
+unsafe extern "system" fn custom_wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -257,24 +257,19 @@ unsafe extern "system" fn wndproc_hook(
 pub unsafe fn hook_wndproc(hwnd: u64) -> bool {
     let w = HWND(hwnd as *mut c_void);
 
-    let prev_proc = GetWindowLongPtrW(w, GWLP_WNDPROC);
-    if prev_proc == 0 {
-        println!("Failed to get original WndProc: {:?}\r\n", GetLastError());
-        return false;
-    }
-
     let mut guard = ORIGINAL_WNDPROC.lock().unwrap();
     if guard.is_some() {
         println!("WndProc already hooked.\r\n");
         return false;
     }
 
-    *guard = Some(std::mem::transmute(prev_proc));
-    let result = SetWindowLongPtrW(w, GWLP_WNDPROC, wndproc_hook as isize);
-    if result == 0 {
+    let previous = SetWindowLongPtrW(w, GWLP_WNDPROC, custom_wndproc as isize);
+    if previous == 0 {
         println!("Failed to set new WndProc.\r\n: {:?}\r\n", GetLastError());
         return false;
     }
+
+    *guard = Some(std::mem::transmute(previous));
 
     println!("WndProc successfully hooked.\r\n");
     true
@@ -306,12 +301,8 @@ pub fn is_input_enabled(hwnd: u64) -> bool {
     unsafe { IsWindowEnabled(HWND(hwnd as *mut c_void)).as_bool() }
 }
 
-pub fn enable_input(hwnd: u64) -> bool {
-    unsafe { EnableWindow(HWND(hwnd as *mut c_void), true).as_bool() }
-}
-
-pub fn disable_input(hwnd: u64) -> bool {
-    unsafe { EnableWindow(HWND(hwnd as *mut c_void), false).as_bool() }
+pub fn toggle_input(hwnd: u64, state: bool) -> bool {
+    unsafe { EnableWindow(HWND(hwnd as *mut c_void), state).as_bool() }
 }
 
 pub fn key_down(hwnd: u64, vkey: i32) {
