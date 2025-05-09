@@ -10,7 +10,7 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, GetLastError, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT,
-            TRUE, WAIT_TIMEOUT, WPARAM,
+            TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         System::{
             Diagnostics::Debug::WriteProcessMemory,
@@ -25,7 +25,7 @@ use windows::{
             WindowsAndMessaging::{
                 CallWindowProcW, DefWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW,
                 GetWindowRect, GetWindowThreadProcessId, PostMessageW, SetWindowLongPtrW,
-                GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_USER, WNDPROC,
+                GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_MOUSEMOVE, WM_USER, WNDPROC,
             },
         },
     },
@@ -144,7 +144,7 @@ impl Injector {
         } {
             Ok(h) => h,
             Err(_) => {
-                eprintln!("CreateRemoteThread failed\r\n");
+                eprintln!("[WaspInput]: CreateRemoteThread failed\r\n");
                 unsafe { CloseHandle(process_handle).ok() };
                 return false;
             }
@@ -158,7 +158,7 @@ impl Injector {
             let _ = VirtualFreeEx(process_handle, remote_address, 0, MEM_RELEASE);
         }
 
-        if wait_result != windows::Win32::Foundation::WAIT_OBJECT_0 {
+        if wait_result != WAIT_OBJECT_0 {
             eprintln!("[WaspInput]: WaitForSingleObject timed out.\r\n");
             return false;
         }
@@ -230,21 +230,17 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
     }
 }
 
-static ORIGINAL_WNDPROC: Mutex<Option<WNDPROC>> = Mutex::new(None);
+static ORIGINAL_WNDPROC: Mutex<Option<WNDPROC>> = Mutex::new(None); //temporarily here, add to clients map later.
 
-unsafe extern "system" fn custom_wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let new_msg = match msg {
-        x if x == (WM_USER + 1) => WM_KEYDOWN,
-        x if x == (WM_USER + 2) => WM_KEYUP,
+        x if x == (WM_USER + 1) => WM_MOUSEMOVE,
+        x if x == (WM_USER + 2) => WM_KEYDOWN,
+        x if x == (WM_USER + 3) => WM_KEYUP,
         _ => msg,
     };
 
-    print!("MSG: {}, NEW: {}\r\n", msg, new_msg);
+    println!("[WaspInput]: msg: {}, new_msg: {}\r\n", msg, new_msg);
 
     let guard = ORIGINAL_WNDPROC.lock().unwrap();
     if let Some(original) = *guard {
@@ -259,19 +255,22 @@ pub unsafe fn hook_wndproc(hwnd: u64) -> bool {
 
     let mut guard = ORIGINAL_WNDPROC.lock().unwrap();
     if guard.is_some() {
-        println!("WndProc already hooked.\r\n");
+        println!("[WaspInput]: WndProc already hooked.\r\n");
         return false;
     }
 
     let previous = SetWindowLongPtrW(w, GWLP_WNDPROC, custom_wndproc as isize);
     if previous == 0 {
-        println!("Failed to set new WndProc.\r\n: {:?}\r\n", GetLastError());
+        println!(
+            "[WaspInput]: Failed to set new WndProc: {:?}\r\n",
+            GetLastError()
+        );
         return false;
     }
 
     *guard = Some(std::mem::transmute(previous));
 
-    println!("WndProc successfully hooked.\r\n");
+    println!("[WaspInput]: WndProc successfully hooked.\r\n");
     true
 }
 
@@ -283,16 +282,16 @@ pub unsafe fn unhook_wndproc(hwnd: u64) -> bool {
         if let Some(original) = original {
             let result = SetWindowLongPtrW(w, GWLP_WNDPROC, original as isize);
             if result == 0 {
-                eprintln!("Failed to restore original WndProc.\r\n");
+                println!("[WaspInput]: Failed to restore original WndProc.\r\n");
                 return false;
             }
             *guard = None;
-            println!("WndProc successfully restored.\r\n");
+            println!("[WaspInput]: WndProc successfully restored.\r\n");
             return true;
         }
     }
 
-    eprintln!("No original WndProc stored.\r\n");
+    println!("[WaspInput]: No original WndProc stored.\r\n");
     false
 }
 
@@ -305,26 +304,22 @@ pub fn toggle_input(hwnd: u64, state: bool) -> bool {
     unsafe { EnableWindow(HWND(hwnd as *mut c_void), state).as_bool() }
 }
 
-pub fn key_down(hwnd: u64, vkey: i32) {
+pub fn key_event(hwnd: u64, vkey: i32, up: bool) {
     let hwnd = HWND(hwnd as *mut c_void);
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WM_USER + 1,
+            WM_USER + 2 + (up as u32),
             WPARAM(vkey as usize),
-            LPARAM(0x001E0001),
+            LPARAM(0x00000001),
         );
     }
 }
 
-pub fn key_up(hwnd: u64, vkey: i32) {
+pub fn mouse_move(hwnd: u64, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
+    let lparam = ((x << 16) | y);
     unsafe {
-        let _ = PostMessageW(
-            Some(hwnd),
-            WM_USER + 2,
-            WPARAM(vkey as usize),
-            LPARAM(0xC01E0001),
-        );
+        let _ = PostMessageW(Some(hwnd), WM_USER + 1, WPARAM(0), LPARAM(lparam as isize));
     }
 }

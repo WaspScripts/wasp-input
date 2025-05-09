@@ -7,7 +7,9 @@ use std::{
     sync::Mutex,
 };
 
-use crate::platform::{get_jagrenderview, get_window_size, key_down, key_up, unhook_wndproc};
+use crate::platform::{
+    get_jagrenderview, get_window_size, hook_wndproc, key_event, mouse_move, unhook_wndproc,
+};
 
 #[repr(C)]
 pub struct SimbaTarget {
@@ -36,10 +38,12 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
     let hwnd = match get_jagrenderview(pid) {
         Some(hwnd) => hwnd.0 as u64,
         None => {
-            println!("Couldn't find JagRenderView HWND\r\n");
+            println!("[WaspInput]: Couldn't find JagRenderView HWND\r\n");
             return null_mut();
         }
     };
+
+    unsafe { hook_wndproc(hwnd) };
 
     let mut clients = TARGETS.lock().unwrap();
     if let Some(target) = clients.get(&pid) {
@@ -67,7 +71,7 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
     }
 
     if !image.is_null() {
-        println!("TODO: SimbaPluginTarget_RequestWithDebugImage\r\n");
+        println!("[WaspInput]: TODO: SimbaPluginTarget_RequestWithDebugImage\r\n");
     }
 
     target
@@ -126,7 +130,24 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
     bgra: *mut *mut c_void,
     data_width: *mut c_int,
 ) -> bool {
-    println!("TODO: Implement SimbaPluginTarget_GetImageData\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return false;
+    }
+
+    if bgra.is_null() {
+        println!("[WaspInput]: bgra is null!\r\n");
+        return false;
+    }
+
+    if data_width.is_null() {
+        println!("[WaspInput]: data_width is null!\r\n");
+        return false;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_GetImageData\r\n");
     false
 }
 
@@ -135,7 +156,13 @@ pub extern "C" fn SimbaPluginTarget_MousePressed(
     target: *mut SimbaTarget,
     mouse_button: c_int,
 ) -> bool {
-    println!("TODO: Implement SimbaPluginTarget_MousePressed\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return false;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MousePressed\r\n");
     false
 }
 
@@ -145,55 +172,89 @@ pub extern "C" fn SimbaPluginTarget_MousePosition(
     x: *mut c_int,
     y: *mut c_int,
 ) {
-    println!("TODO: Implement SimbaPluginTarget_MousePosition\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
     if !x.is_null() {
         unsafe { *x = 0 };
     }
     if !y.is_null() {
         unsafe { *y = 0 };
     }
+
+    //let target = unsafe { Box::from_raw(target) };
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MousePosition\r\n");
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c_int, y: c_int) {
-    println!("TODO: Implement SimbaPluginTarget_MouseTeleport\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
+    let target = unsafe { Box::from_raw(target) };
+
+    mouse_move(target.hwnd, x, y);
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_button: c_int) {
-    println!("TODO: Implement SimbaPluginTarget_MouseUp\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseUp\r\n");
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_button: c_int) {
-    println!("TODO: Implement SimbaPluginTarget_MouseDown\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseDown\r\n");
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_MouseScroll(target: *mut SimbaTarget, scrolls: c_int) {
-    println!("TODO: Implement SimbaPluginTarget_MouseScroll\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseScroll\r\n");
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int) {
     if target.is_null() {
-        print!("target is null!\r\n");
+        println!("[WaspInput]: target is null!\r\n");
         return;
     }
 
     let target = unsafe { Box::from_raw(target) };
-    key_down(target.hwnd, key);
+    key_event(target.hwnd, key, false);
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) {
     if target.is_null() {
-        print!("target is null!\r\n");
+        println!("[WaspInput]: target is null!\r\n");
         return;
     }
 
     let target = unsafe { Box::from_raw(target) };
-    key_up(target.hwnd, key);
+    key_event(target.hwnd, key, true);
 }
 
 #[no_mangle]
@@ -203,11 +264,29 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
     len: c_int,
     sleeptimes: *mut c_int,
 ) {
-    println!("TODO: Implement SimbaPluginTarget_KeySend\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return;
+    }
+
+    if sleeptimes.is_null() {
+        println!("[WaspInput]: sleeptimes is null!\r\n");
+        return;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_KeySend\r\n");
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyPressed(target: *mut SimbaTarget, key: c_int) -> bool {
-    println!("TODO: Implement SimbaPluginTarget_KeyPressed\r\n");
+    if target.is_null() {
+        println!("[WaspInput]: target is null!\r\n");
+        return false;
+    }
+
+    //let target = unsafe { Box::from_raw(target) };
+    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_KeyPressed\r\n");
     false
 }
