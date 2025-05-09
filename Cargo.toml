@@ -22,4 +22,3 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ]}
 lazy_static = "1.4"
-parking_lot = "0.12"

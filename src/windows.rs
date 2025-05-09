@@ -2,13 +2,15 @@ use std::{
     cell::RefCell,
     ffi::{c_char, c_void},
     ptr::null_mut,
+    sync::Mutex,
 };
 
 use windows::{
     core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, RECT, TRUE, WAIT_TIMEOUT, WPARAM,
+            CloseHandle, GetLastError, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT,
+            TRUE, WAIT_TIMEOUT, WPARAM,
         },
         System::{
             Diagnostics::Debug::WriteProcessMemory,
@@ -19,13 +21,11 @@ use windows::{
             Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS},
         },
         UI::{
-            Input::KeyboardAndMouse::{
-                EnableWindow, IsWindowEnabled, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT,
-                KEYBD_EVENT_FLAGS, VIRTUAL_KEY,
-            },
+            Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
             WindowsAndMessaging::{
-                EnumChildWindows, EnumWindows, GetClassNameW, GetWindowRect,
-                GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP,
+                CallWindowProcW, DefWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW,
+                GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, PostMessageW,
+                SetWindowLongPtrW, GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_USER, WNDPROC,
             },
         },
     },
@@ -230,6 +230,77 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
     }
 }
 
+static ORIGINAL_WNDPROC: Mutex<Option<WNDPROC>> = Mutex::new(None);
+
+unsafe extern "system" fn wndproc_hook(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let new_msg = match msg {
+        x if x == (WM_USER + 1) => WM_KEYDOWN,
+        x if x == (WM_USER + 2) => WM_KEYUP,
+        _ => msg,
+    };
+
+    print!("MSG: {}, NEW: {}\r\n", msg, new_msg);
+
+    let guard = ORIGINAL_WNDPROC.lock().unwrap();
+    if let Some(original) = *guard {
+        CallWindowProcW(original, hwnd, new_msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, new_msg, wparam, lparam)
+    }
+}
+
+pub unsafe fn hook_wndproc(hwnd: u64) -> bool {
+    let w = HWND(hwnd as *mut c_void);
+
+    let prev_proc = GetWindowLongPtrW(w, GWLP_WNDPROC);
+    if prev_proc == 0 {
+        println!("Failed to get original WndProc: {:?}\r\n", GetLastError());
+        return false;
+    }
+
+    let mut guard = ORIGINAL_WNDPROC.lock().unwrap();
+    if guard.is_some() {
+        println!("WndProc already hooked.\r\n");
+        return false;
+    }
+
+    *guard = Some(std::mem::transmute(prev_proc));
+    let result = SetWindowLongPtrW(w, GWLP_WNDPROC, wndproc_hook as isize);
+    if result == 0 {
+        println!("Failed to set new WndProc.\r\n: {:?}\r\n", GetLastError());
+        return false;
+    }
+
+    println!("WndProc successfully hooked.\r\n");
+    true
+}
+
+pub unsafe fn unhook_wndproc(hwnd: u64) -> bool {
+    let w = HWND(hwnd as isize as *mut c_void);
+
+    let mut guard = ORIGINAL_WNDPROC.lock().unwrap();
+    if let Some(original) = *guard {
+        if let Some(original) = original {
+            let result = SetWindowLongPtrW(w, GWLP_WNDPROC, original as isize);
+            if result == 0 {
+                eprintln!("Failed to restore original WndProc.\r\n");
+                return false;
+            }
+            *guard = None;
+            println!("WndProc successfully restored.\r\n");
+            return true;
+        }
+    }
+
+    eprintln!("No original WndProc stored.\r\n");
+    false
+}
+
 //Input
 pub fn is_input_enabled(hwnd: u64) -> bool {
     unsafe { IsWindowEnabled(HWND(hwnd as *mut c_void)).as_bool() }
@@ -248,7 +319,7 @@ pub fn key_down(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WM_KEYDOWN,
+            WM_USER + 1,
             WPARAM(vkey as usize),
             LPARAM(0x001E0001),
         );
@@ -260,7 +331,7 @@ pub fn key_up(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WM_KEYUP,
+            WM_USER + 2,
             WPARAM(vkey as usize),
             LPARAM(0xC01E0001),
         );

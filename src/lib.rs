@@ -5,7 +5,9 @@ use std::sync::Mutex;
 #[cfg_attr(windows, path = "windows.rs")]
 #[cfg_attr(unix, path = "unix.rs")]
 mod platform;
-use platform::{disable_input, enable_input, get_jagrenderview, is_input_enabled, Injector};
+use platform::{
+    disable_input, enable_input, get_jagrenderview, hook_wndproc, is_input_enabled, Injector,
+};
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
@@ -45,14 +47,19 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
         }
     };
 
-    *PROCESS_PID.lock().unwrap() = Some(pid);
-    match get_jagrenderview(pid) {
-        Some(hwnd) => *WINDOW_HWND.lock().unwrap() = Some(hwnd.0 as u64),
+    let hwnd = match get_jagrenderview(pid) {
+        Some(h) => h.0 as u64,
         None => {
             println!("Couldn't find JagRenderView HWND\n");
             return false;
         }
     };
+
+    println!("HWND: {}", hwnd);
+    *PROCESS_PID.lock().unwrap() = Some(pid);
+    *WINDOW_HWND.lock().unwrap() = Some(hwnd);
+
+    unsafe { hook_wndproc(hwnd) };
 
     Injector::inject(module_path, pid)
 }

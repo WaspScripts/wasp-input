@@ -7,7 +7,7 @@ use std::{
     sync::Mutex,
 };
 
-use crate::platform::{get_jagrenderview, get_window_size, key_down, key_up};
+use crate::platform::{get_jagrenderview, get_window_size, key_down, key_up, unhook_wndproc};
 
 #[repr(C)]
 pub struct SimbaTarget {
@@ -82,8 +82,10 @@ pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
     let target = unsafe { Box::from_raw(target) };
     println!(
         "Releasing Client PID: {} and HWND: {}",
-        &target.pid, &target.hwnd
+        target.pid, target.hwnd
     );
+
+    unsafe { unhook_wndproc(target.hwnd) };
 
     let mut clients = TARGETS.lock().unwrap();
     clients.remove(&target.pid);
@@ -179,11 +181,8 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
         return;
     }
 
-    print!("Fetching target!\r\n");
     let target = unsafe { Box::from_raw(target) };
-    print!("Sending {} key to {}!\r\n", key, target.hwnd);
     key_down(target.hwnd, key);
-    print!("Done sending!\r\n");
 }
 
 #[no_mangle]
