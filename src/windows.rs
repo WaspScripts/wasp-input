@@ -13,12 +13,16 @@ use windows::{
             TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         System::{
+            Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS},
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{
                 VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
             },
-            Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS},
+            Threading::{
+                CreateRemoteThread, GetCurrentProcessId, GetExitCodeThread, OpenProcess,
+                WaitForSingleObject, PROCESS_ALL_ACCESS,
+            },
         },
         UI::{
             Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
@@ -37,10 +41,22 @@ pub static mut MODULE: HMODULE = HMODULE(null_mut());
 #[no_mangle]
 pub extern "system" fn DllMain(
     hinst_dll: HINSTANCE,
-    _fdw_reason: u32, // DWORD is u32 in windows crate
-    _lpv_reserved: *mut std::ffi::c_void,
+    fdw_reason: u32, // DWORD is u32 in windows crate
+    _lpv_reserved: *mut c_void,
 ) -> BOOL {
     unsafe { MODULE = HMODULE(hinst_dll.0) };
+
+    match fdw_reason {
+        1 => unsafe {
+            println!(
+                "[WaspInput]: Console attached. PID: {:?}",
+                GetCurrentProcessId()
+            );
+        },
+        0 => println!("[WaspInput]: Detached."),
+        _ => (),
+    }
+
     TRUE
 }
 
@@ -163,6 +179,35 @@ impl Injector {
             return false;
         }
 
+        let local_module = unsafe { GetModuleHandleA(s!("waspinput.dll")) }.unwrap();
+        let local_init_fn = waspinput_init as *const () as usize;
+        let local_base = local_module.0 as usize;
+        let fn_offset = local_init_fn - local_base;
+
+        let remote_dll_base: usize = {
+            let mut exit_code = 0u32;
+            unsafe { GetExitCodeThread(remote_thread, &mut exit_code).unwrap() };
+            exit_code as usize
+        };
+
+        let remote_init_fn = remote_dll_base + fn_offset;
+
+        let hwnd = get_jagrenderview(pid).unwrap().0 as usize;
+        let remote_thread2 = unsafe {
+            CreateRemoteThread(
+                process_handle,
+                None,
+                0,
+                Some(std::mem::transmute::<
+                    usize,
+                    unsafe extern "system" fn(*mut c_void) -> u32,
+                >(remote_init_fn)),
+                Some(hwnd as *mut c_void),
+                0,
+                None,
+            )
+        };
+
         true
     }
 }
@@ -232,7 +277,12 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
 
 static ORIGINAL_WNDPROC: Mutex<Option<WNDPROC>> = Mutex::new(None); //temporarily here, add to clients map later.
 
-unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub unsafe extern "system" fn custom_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     let new_msg = match msg {
         x if x == (WM_USER + 1) => WM_MOUSEMOVE,
         x if x == (WM_USER + 2) => WM_KEYDOWN,
@@ -293,6 +343,11 @@ pub unsafe fn unhook_wndproc(hwnd: u64) -> bool {
 
     println!("[WaspInput]: No original WndProc stored.\r\n");
     false
+}
+
+#[no_mangle]
+pub extern "system" fn waspinput_init(hwnd: u64) -> bool {
+    unsafe { hook_wndproc(hwnd) }
 }
 
 //Input
