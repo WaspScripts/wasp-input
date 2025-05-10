@@ -10,15 +10,17 @@ use windows::{
     core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, GetLastError, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, RECT,
-            TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+            CloseHandle, GetLastError, FALSE, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT,
+            RECT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         System::{
             Console::AllocConsole,
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
             Memory::{
-                VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+                CreateFileMappingA, MapViewOfFile, OpenFileMappingA, VirtualAllocEx, VirtualFreeEx,
+                FILE_MAP_ALL_ACCESS, FILE_MAP_READ, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
+                PAGE_READWRITE,
             },
             Threading::{
                 CreateRemoteThread, CreateThread, GetCurrentProcessId, OpenProcess,
@@ -42,13 +44,10 @@ pub static mut MODULE: HMODULE = HMODULE(null_mut());
 #[no_mangle]
 unsafe extern "system" fn start_thread(lparam: *mut c_void) -> u32 {
     let pid = lparam as usize as u32;
-    let hwnd = match get_jagrenderview(pid) {
-        Some(h) => h.0 as u64,
-        None => {
-            println!("[WaspInput]: Couldn't find JagRenderView HWND\n");
-            return 1;
-        }
-    };
+    let hwnd = get_jagrenderview(pid)
+        .expect("Can't find JagRenderView HWND!\r\n")
+        .0 as u64;
+
     let _success = hook_wndproc(hwnd);
     0
 }
@@ -63,19 +62,31 @@ pub extern "system" fn DllMain(
 
     let pid = unsafe { GetCurrentProcessId() };
 
+    print!("HANDLE: {:?} FDW_REASON: {}\r\n", hinst_dll, fdw_reason);
+
     match fdw_reason {
         1 => unsafe {
-            let _ = AllocConsole();
-            println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
-            // let _ = DisableThreadLibraryCalls(hinst_dll.into());
-            let _ = CreateThread(
-                Some(null_mut()),
-                0,
-                Some(start_thread),
-                Some(pid as usize as *mut c_void),
-                THREAD_CREATION_FLAGS(0),
-                Some(null_mut()),
-            );
+            let _ = DisableThreadLibraryCalls(hinst_dll.into());
+
+            if let Ok(hmap) =
+                OpenFileMappingA(FILE_MAP_READ.0, false, PCSTR(b"WASPINPUT_FLAG\0".as_ptr()))
+            {
+                let flag_ptr = MapViewOfFile(hmap, FILE_MAP_READ, 0, 0, 1);
+                let is_injected = *(flag_ptr.Value as *const u8);
+                if is_injected == 1 {
+                    let _ = AllocConsole();
+                    println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
+
+                    let _ = CreateThread(
+                        Some(null_mut()),
+                        0,
+                        Some(start_thread),
+                        Some(pid as usize as *mut c_void),
+                        THREAD_CREATION_FLAGS(0),
+                        Some(null_mut()),
+                    );
+                }
+            }
         },
         0 => println!("[WaspInput]: Detached.\r\n"),
         _ => (),
@@ -87,13 +98,29 @@ pub extern "system" fn DllMain(
 pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
     let name_str = PCSTR::from_raw(name as *const u8);
     let func_ptr = GetProcAddress(MODULE, name_str);
-    std::mem::transmute(func_ptr)
+    transmute(func_ptr)
 }
 
 pub struct Injector;
 
 impl Injector {
-    pub fn inject(module_path: &str, pid: u32) -> bool {
+    pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
+        let hmap = CreateFileMappingA(
+            HANDLE::default(),
+            None,
+            PAGE_READWRITE,
+            0,
+            1,
+            PCSTR(b"WASPINPUT_FLAG\0".as_ptr()),
+        )
+        .expect("[WaspInput]: Cannot initialize mappings.\r\n");
+
+        let flag_ptr = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, 1);
+
+        // Correct way to write to the mapped memory
+        let flag_ptr_raw = flag_ptr.Value as *mut u8;
+        *flag_ptr_raw = 1;
+
         let process_handle = match unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid) } {
             Ok(process) => {
                 unsafe {
