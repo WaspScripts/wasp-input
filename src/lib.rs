@@ -5,7 +5,7 @@ use std::sync::Mutex;
 #[cfg_attr(windows, path = "windows.rs")]
 #[cfg_attr(unix, path = "unix.rs")]
 mod platform;
-use platform::{get_jagrenderview, is_input_enabled, toggle_input, Injector};
+use platform::{get_jagrenderview, is_input_enabled, open_console, toggle_input, Injector};
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
@@ -17,6 +17,7 @@ const PASCAL_EXPORTS: &[(&str, &str)] = &[
         "Inject",
         "function Inject(dll: String; pid: UInt32): Boolean;",
     ),
+    ("OpenConsole", "procedure OpenConsole();"),
     ("GetInputState", "function GetInputState(): Boolean;"),
     (
         "SetInputState",
@@ -59,6 +60,15 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
     *WINDOW_HWND.lock().unwrap() = Some(hwnd);
 
     unsafe { Injector::inject(module_path, pid) }
+}
+
+#[no_mangle]
+pub extern "C" fn OpenConsole() {
+    let hwnd = WINDOW_HWND.lock().unwrap();
+    match *hwnd {
+        Some(h) => open_console(h),
+        None => return,
+    };
 }
 
 #[no_mangle]

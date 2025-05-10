@@ -14,7 +14,7 @@ use windows::{
             RECT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         System::{
-            Console::AllocConsole,
+            Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
             Memory::{
@@ -31,12 +31,26 @@ use windows::{
             Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
             WindowsAndMessaging::{
                 CallWindowProcW, DefWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW,
-                GetWindowRect, GetWindowThreadProcessId, PostMessageW, SetWindowLongPtrW,
-                GWLP_WNDPROC, WM_KEYDOWN, WM_KEYUP, WM_MOUSEMOVE, WM_USER, WNDPROC,
+                GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR,
+                WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETFOCUS, WM_USER, WNDPROC,
             },
         },
     },
 };
+
+const WI_CONSOLE: u32 = WM_USER + 1;
+const WI_MOUSEMOVE: u32 = WM_USER + 2;
+const WI_LBUTTONDOWN: u32 = WM_USER + 3;
+const WI_LBUTTONUP: u32 = WM_USER + 4;
+const WI_RBUTTONDOWN: u32 = WM_USER + 6;
+const WI_RBUTTONUP: u32 = WM_USER + 7;
+const WI_KEYDOWN: u32 = WM_USER + 8;
+const WI_CHAR: u32 = WM_USER + 9;
+const WI_KEYUP: u32 = WM_USER + 10;
+const WI_SETFOCUS: u32 = WM_USER + 11;
+const WI_KILLFOCUS: u32 = WM_USER + 12;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
@@ -60,8 +74,6 @@ pub extern "system" fn DllMain(
 ) -> BOOL {
     unsafe { MODULE = HMODULE(hinst_dll.0) };
 
-    let pid = unsafe { GetCurrentProcessId() };
-
     print!("HANDLE: {:?} FDW_REASON: {}\r\n", hinst_dll, fdw_reason);
 
     match fdw_reason {
@@ -74,7 +86,20 @@ pub extern "system" fn DllMain(
                 let flag_ptr = MapViewOfFile(hmap, FILE_MAP_READ, 0, 0, 1);
                 let is_injected = *(flag_ptr.Value as *const u8);
                 if is_injected == 1 {
-                    let _ = AllocConsole();
+                    let hwnd = GetConsoleWindow();
+                    if hwnd.0 != null_mut() {
+                        if IsWindowVisible(hwnd).as_bool() {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                        } else {
+                            let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+                        }
+                    }
+
+                    if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+                        let _ = AllocConsole();
+                    }
+
+                    let pid = GetCurrentProcessId();
                     println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
 
                     let _ = CreateThread(
@@ -306,9 +331,30 @@ pub unsafe extern "system" fn custom_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     let new_msg = match msg {
-        x if x == (WM_USER + 1) => WM_MOUSEMOVE,
-        x if x == (WM_USER + 2) => WM_KEYDOWN,
-        x if x == (WM_USER + 3) => WM_KEYUP,
+        x if x == WI_CONSOLE => {
+            let hwnd = GetConsoleWindow();
+            if hwnd.0 != null_mut() {
+                if IsWindowVisible(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                } else {
+                    let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+                }
+            }
+            if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+                let _ = AllocConsole();
+            }
+            return LRESULT(0);
+        }
+        x if x == WI_MOUSEMOVE => WM_MOUSEMOVE,
+        x if x == WI_LBUTTONDOWN => WM_LBUTTONDOWN,
+        x if x == WI_LBUTTONUP => WM_LBUTTONUP,
+        x if x == WI_RBUTTONDOWN => WM_RBUTTONDOWN,
+        x if x == WI_RBUTTONUP => WM_RBUTTONUP,
+        x if x == WI_KEYDOWN => WM_KEYDOWN,
+        x if x == WI_CHAR => WM_CHAR,
+        x if x == WI_KEYUP => WM_KEYUP,
+        x if x == WI_SETFOCUS => WM_SETFOCUS,
+        x if x == WI_KILLFOCUS => return LRESULT(0),
         _ => msg,
     };
 
@@ -378,11 +424,16 @@ pub fn toggle_input(hwnd: u64, state: bool) -> bool {
     unsafe { EnableWindow(HWND(hwnd as *mut c_void), state).as_bool() }
 }
 
+pub fn open_console(hwnd: u64) {
+    let hwnd = Some(HWND(hwnd as *mut c_void));
+    let _ = unsafe { PostMessageW(hwnd, WI_CONSOLE, WPARAM(0), LPARAM(0)) };
+}
+
 pub fn mouse_move(hwnd: u64, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
     let lparam = (x << 16) | y;
     unsafe {
-        let _ = PostMessageW(Some(hwnd), WM_USER + 1, WPARAM(0), LPARAM(lparam as isize));
+        let _ = PostMessageW(Some(hwnd), WI_MOUSEMOVE, WPARAM(0), LPARAM(lparam as isize));
     }
 }
 
@@ -391,7 +442,7 @@ pub fn key_down(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WM_USER + 2,
+            WI_KEYDOWN,
             WPARAM(vkey as usize),
             LPARAM(0x00000001),
         );
@@ -403,7 +454,7 @@ pub fn key_up(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WM_USER + 3,
+            WI_KEYUP,
             WPARAM(vkey as usize),
             LPARAM(0x00000001),
         );
