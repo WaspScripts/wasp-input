@@ -37,7 +37,7 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
         return false;
     }
 
-    let module_path = unsafe {
+    let path = unsafe {
         match CStr::from_ptr(path).to_str() {
             Ok(s) => s,
             Err(_) => {
@@ -58,7 +58,7 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
     *PROCESS_PID.lock().unwrap() = Some(pid);
     *WINDOW_HWND.lock().unwrap() = Some(hwnd);
 
-    Injector::inject(module_path, pid)
+    Injector::inject(path, pid)
 }
 
 #[no_mangle]

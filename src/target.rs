@@ -7,9 +7,7 @@ use std::{
     sync::Mutex,
 };
 
-use crate::platform::{
-    get_jagrenderview, get_window_size, hook_wndproc, key_event, mouse_move, unhook_wndproc,
-};
+use crate::platform::{get_jagrenderview, get_window_size, key_down, key_up, mouse_move};
 
 #[repr(C)]
 pub struct SimbaTarget {
@@ -42,8 +40,6 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
             return null_mut();
         }
     };
-
-    unsafe { hook_wndproc(hwnd) };
 
     let mut clients = TARGETS.lock().unwrap();
     if let Some(target) = clients.get(&pid) {
@@ -88,8 +84,6 @@ pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
         "Releasing Client PID: {} and HWND: {}",
         target.pid, target.hwnd
     );
-
-    unsafe { unhook_wndproc(target.hwnd) };
 
     let mut clients = TARGETS.lock().unwrap();
     clients.remove(&target.pid);
@@ -243,7 +237,7 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
     }
 
     let target = unsafe { Box::from_raw(target) };
-    key_event(target.hwnd, key, false);
+    key_down(target.hwnd, key);
 }
 
 #[no_mangle]
@@ -254,7 +248,7 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
     }
 
     let target = unsafe { Box::from_raw(target) };
-    key_event(target.hwnd, key, true);
+    key_up(target.hwnd, key);
 }
 
 #[no_mangle]
