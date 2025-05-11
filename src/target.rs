@@ -7,7 +7,9 @@ use std::{
     sync::Mutex,
 };
 
-use crate::platform::{get_jagrenderview, get_window_size, key_down, key_up, mouse_move};
+use crate::platform::{
+    get_jagrenderview, get_window_size, key_down, key_up, lbutton, mbutton, mouse_move, rbutton,
+};
 
 #[repr(C)]
 pub struct SimbaTarget {
@@ -15,8 +17,30 @@ pub struct SimbaTarget {
     pub hwnd: u64,
 }
 
+struct Point {
+    x: i32,
+    y: i32,
+}
+
 lazy_static::lazy_static! {
     static ref TARGETS: Mutex<HashMap<u32, Box<SimbaTarget>>> = Mutex::new(HashMap::new());
+    static ref MOUSE_POSITION: Mutex<Point> = Mutex::new(Point { x: -1, y: -1 });
+}
+
+fn set_mouse_position(hwnd: u64) {
+    let mut point = Point { x: -1, y: -1 };
+    /*  unsafe {
+        if GetCursorPos(&mut point).as_bool() {
+            // Lock for writing
+            let mut lock = MOUSE_POSITION.write().unwrap();
+            *lock = point;
+        }
+    } */
+}
+
+fn get_mouse_position() -> (i32, i32) {
+    let lock = MOUSE_POSITION.lock().unwrap();
+    (lock.x, lock.y)
 }
 
 #[no_mangle]
@@ -179,7 +203,11 @@ pub extern "C" fn SimbaPluginTarget_MousePosition(
     }
 
     //let target = unsafe { Box::from_raw(target) };
-    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MousePosition\r\n");
+    let pos = get_mouse_position();
+    unsafe {
+        *x = pos.0;
+        *y = pos.1;
+    };
 }
 
 #[no_mangle]
@@ -190,7 +218,6 @@ pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c
     }
 
     let target = unsafe { Box::from_raw(target) };
-
     mouse_move(target.hwnd, x, y);
 }
 
@@ -201,8 +228,15 @@ pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_butt
         return;
     }
 
-    //let target = unsafe { Box::from_raw(target) };
-    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseUp\r\n");
+    let target = unsafe { Box::from_raw(target) };
+
+    let pos = get_mouse_position();
+    match mouse_button {
+        0 => lbutton(target.hwnd, false, pos.0, pos.1),
+        1 => mbutton(target.hwnd, false, pos.0, pos.1),
+        2 => rbutton(target.hwnd, false, pos.0, pos.1),
+        _ => println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button),
+    };
 }
 
 #[no_mangle]
@@ -212,9 +246,15 @@ pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_bu
         return;
     }
 
-    //let target = unsafe { Box::from_raw(target) };
+    let target = unsafe { Box::from_raw(target) };
 
-    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseDown\r\n");
+    let pos = get_mouse_position();
+    match mouse_button {
+        0 => lbutton(target.hwnd, true, pos.0, pos.1),
+        1 => mbutton(target.hwnd, true, pos.0, pos.1),
+        2 => rbutton(target.hwnd, true, pos.0, pos.1),
+        _ => println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button),
+    };
 }
 
 #[no_mangle]
