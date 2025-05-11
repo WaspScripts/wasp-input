@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
-use crate::platform::get_proc_address;
+use crate::windows::get_proc_address;
 use crate::{PASCAL_EXPORTS, PASCAL_TYPES}; // bring in the constants
 
 #[no_mangle]

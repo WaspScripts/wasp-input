@@ -2,10 +2,8 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
-#[cfg_attr(windows, path = "windows.rs")]
-#[cfg_attr(unix, path = "unix.rs")]
-mod platform;
-use platform::{get_jagrenderview, is_input_enabled, open_console, toggle_input, Injector};
+mod windows;
+use windows::{get_jagrenderview, is_input_enabled, open_console, toggle_input, Injector};
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];

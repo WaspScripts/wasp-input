@@ -10,8 +10,9 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, GetLastError, FALSE, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT,
-            RECT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+            POINT, RECT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
+        Graphics::Gdi::ScreenToClient,
         System::{
             Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
             Diagnostics::Debug::WriteProcessMemory,
@@ -29,12 +30,11 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
             WindowsAndMessaging::{
-                CallWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW, GetWindowRect,
-                GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetWindowLongPtrW,
-                ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY,
-                WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_USER,
-                WNDPROC,
+                CallWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
+                GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_USER, WNDPROC,
             },
         },
     },
@@ -472,6 +472,25 @@ pub fn open_console(hwnd: u64) {
     let _ = unsafe { PostMessageW(hwnd, WI_CONSOLE, WPARAM(0), LPARAM(0)) };
 }
 
+pub fn get_mouse_position(hwnd: u64) -> Option<POINT> {
+    let hwnd = HWND(hwnd as *mut c_void);
+    unsafe {
+        let mut point = POINT::default();
+
+        // Get the cursor position in screen coordinates
+        if !GetCursorPos(&mut point).is_err() {
+            return None;
+        }
+
+        // Convert to client (window-relative) coordinates
+        if !ScreenToClient(hwnd, &mut point).as_bool() {
+            return None;
+        }
+
+        Some(point)
+    }
+}
+
 pub fn mouse_move(hwnd: u64, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
     let lparam = (x << 16) | y;
@@ -519,12 +538,12 @@ pub fn rbutton(hwnd: u64, down: bool, x: i32, y: i32) {
     }
 }
 
-pub fn scroll(hwnd: u64, down: bool, x: i32, y: i32) {
+pub fn scroll(hwnd: u64, down: bool, scrolls: i32, x: i32, y: i32) {
     //let hwnd = HWND(hwnd as *mut c_void);
     let lparam = (x << 16) | y;
     print!(
-        "[WaspInput]: TODO: scroll direction: {}, hwnd: {}, lparam: {}\r\n",
-        down, hwnd, lparam
+        "[WaspInput]: TODO: scroll direction: {}, hwnd: {}, scrolls: {}, lparam: {}\r\n",
+        down, hwnd, scrolls, lparam
     );
 }
 
