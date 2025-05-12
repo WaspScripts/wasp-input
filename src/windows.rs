@@ -473,22 +473,16 @@ pub fn open_console(hwnd: u64) {
 }
 
 pub fn get_mouse_position(hwnd: u64) -> Option<POINT> {
-    let hwnd = HWND(hwnd as *mut c_void);
+    let mut point = POINT::default();
     unsafe {
-        let mut point = POINT::default();
-
-        // Get the cursor position in screen coordinates
         if !GetCursorPos(&mut point).is_err() {
-            return None;
+            let hwnd = HWND(hwnd as *mut c_void);
+            if ScreenToClient(hwnd, &mut point).as_bool() {
+                return Some(point);
+            }
         }
-
-        // Convert to client (window-relative) coordinates
-        if !ScreenToClient(hwnd, &mut point).as_bool() {
-            return None;
-        }
-
-        Some(point)
     }
+    None
 }
 
 pub fn mouse_move(hwnd: u64, x: i32, y: i32) {
