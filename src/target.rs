@@ -201,8 +201,8 @@ pub extern "C" fn SimbaPluginTarget_MousePosition(
     let pt = get_mouse_pos(target.hwnd);
 
     unsafe {
-        *x = &mut pt.x;
-        *y = &mut pt.y;
+        *x = pt.x;
+        *y = pt.y;
     };
 }
 
