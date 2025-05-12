@@ -1,4 +1,5 @@
 //Target related methods for Simba 2.0
+use lazy_static::lazy_static;
 use std::{
     collections::HashMap,
     ffi::CStr,
@@ -7,11 +8,11 @@ use std::{
     sync::Mutex,
 };
 
-use windows::Win32::Foundation::POINT;
+use windows::Win32::{Foundation::POINT, UI::Input::KeyboardAndMouse::VkKeyScanA};
 
 use crate::windows::{
-    get_jagrenderview, get_mouse_position, get_window_size, key_down, key_up, lbutton, mbutton,
-    mouse_move, rbutton, scroll,
+    get_jagrenderview, get_mouse_position, get_window_size, key_down, key_press, key_up, lbutton,
+    mbutton, mouse_move, rbutton, scroll,
 };
 
 #[repr(C)]
@@ -20,10 +21,10 @@ pub struct SimbaTarget {
     pub hwnd: u64,
 }
 
-lazy_static::lazy_static! {
+lazy_static! {
     static ref TARGETS: Mutex<HashMap<u32, Box<SimbaTarget>>> = Mutex::new(HashMap::new());
     static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
-    static ref KEY_STATE: Mutex<HashMap<i32, bool>> = Mutex::new(HashMap::new());
+    static ref KEYBOARD_STATE: Mutex<HashMap<i32, bool>> = Mutex::new(HashMap::new());
     static ref MOUSE_STATE: Mutex<[bool; 2]> = Mutex::new([false; 2]);
 }
 
@@ -159,7 +160,10 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
 
     //let target = unsafe { &*target };
 
-    println!("[WaspInput]: TODO: Implement SimbaPluginTarget_GetImageData\r\n");
+    println!(
+        "[WaspInput]: TODO: Implement SimbaPluginTarget_GetImageData {}, {}, {}, {}\r\n",
+        x, y, width, height
+    );
     false
 }
 
@@ -304,7 +308,7 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
     let target = unsafe { &*target };
     key_down(target.hwnd, key);
 
-    let mut state = KEY_STATE.lock().unwrap();
+    let mut state = KEYBOARD_STATE.lock().unwrap();
     state.insert(key, true);
 }
 
@@ -317,7 +321,7 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
 
     let target = unsafe { &*target };
     key_up(target.hwnd, key);
-    let mut state = KEY_STATE.lock().unwrap();
+    let mut state = KEYBOARD_STATE.lock().unwrap();
     state.insert(key, false);
 }
 
@@ -333,21 +337,38 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
         return;
     }
 
+    if text.is_null() {
+        println!("[WaspInput]: text is null!\r\n");
+        return;
+    }
+
     if sleeptimes.is_null() {
         println!("[WaspInput]: sleeptimes is null!\r\n");
         return;
     }
 
-    //let target = unsafe { &*target };
+    let target = unsafe { &*target };
 
-    println!(
-        "[WaspInput]: TODO: Implement SimbaPluginTarget_KeySend, text: {:?}, len: {}\r\n",
-        text, len
-    );
+    for i in 0..len {
+        let ch = unsafe { *text.add(i as usize) };
+        let char = ch as u8;
+        let key = unsafe { VkKeyScanA(ch) } as i16;
+        let time = unsafe { *sleeptimes.add(i as usize) };
+
+        if char.is_ascii_uppercase() || char.is_ascii_punctuation() {
+            key_down(target.hwnd, 0x10); //shift
+        }
+
+        key_press(target.hwnd, key as i32, time as u64);
+
+        if char.is_ascii_uppercase() || char.is_ascii_punctuation() {
+            key_up(target.hwnd, 0x10); //shift
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyPressed(_target: *mut SimbaTarget, key: c_int) -> bool {
-    let state = KEY_STATE.lock().unwrap();
+    let state = KEYBOARD_STATE.lock().unwrap();
     *state.get(&key).unwrap_or(&false)
 }

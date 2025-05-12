@@ -3,6 +3,8 @@ use std::{
     ffi::{c_char, c_void},
     mem::transmute,
     ptr::null_mut,
+    thread::sleep,
+    time::Duration,
 };
 
 use windows::{
@@ -28,14 +30,15 @@ use windows::{
             },
         },
         UI::{
-            Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled},
+            Input::KeyboardAndMouse::{
+                EnableWindow, IsWindowEnabled, MapVirtualKeyA, MAPVK_VK_TO_VSC,
+            },
             WindowsAndMessaging::{
                 CallWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
                 GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR,
-                WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETFOCUS, WM_USER, WNDPROC,
+                SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_KEYDOWN,
+                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_USER, WNDPROC,
             },
         },
     },
@@ -368,32 +371,32 @@ fn message2string(msg: u32) -> &'static str {
         0x0215 => "WM_CAPTURECHANGED",
         0x0281 => "WM_IME_SETCONTEXT",
         0x0282 => "WM_IME_NOTIFY",
+        WI_CONSOLE => "WI_CONSOLE",
         _ => "UNKNOWN",
     }
 }
 
 pub unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
+    println!(
+        "[WaspInput]: message: {}, wparam: {:?}, lparam: {:?}\r\n",
+        message2string(msg),
+        wparam,
+        lparam
+    );
 
-    println!("[WaspInput]: custom_wndproc\r\n");
-    let new_msg = match msg {
+    match msg {
         x if x == WI_CONSOLE => {
             open_client_console();
             return LRESULT(0);
         }
         x if x == WM_KILLFOCUS => return LRESULT(0),
-        x if x == WM_IME_SETCONTEXT => return LRESULT(0),
-        x if x == WM_IME_NOTIFY => return LRESULT(0),
+        //x if x == WM_IME_SETCONTEXT => return LRESULT(0),
+        //x if x == WM_IME_NOTIFY => return LRESULT(0),
         _ => msg,
     };
 
-    println!(
-        "[WaspInput]: msg: {:x} name: {}\r\n",
-        msg,
-        message2string(new_msg)
-    );
-
-    CallWindowProcW(original, hwnd, new_msg, wparam, lparam)
+    CallWindowProcW(original, hwnd, msg, wparam, lparam)
 }
 
 pub unsafe fn hook_wndproc(hwnd: u64) -> bool {
@@ -453,6 +456,7 @@ pub fn open_console(hwnd: u64) {
     let _ = unsafe { PostMessageW(hwnd, WI_CONSOLE, WPARAM(0), LPARAM(0)) };
 }
 
+//mouse
 pub fn get_mouse_position(hwnd: u64) -> Option<POINT> {
     let mut point = POINT::default();
     unsafe {
@@ -522,20 +526,18 @@ pub fn scroll(hwnd: u64, down: bool, scrolls: i32, x: i32, y: i32) {
     );
 }
 
+//keyboard
 pub fn key_down(hwnd: u64, vkey: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
     unsafe {
+        let key = vkey & 0xFF;
+        let scancode = MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC);
+        let lparam = 1 | (scancode << 16) | (0 << 24);
         let _ = PostMessageW(
             Some(hwnd),
             WM_KEYDOWN,
-            WPARAM(vkey as usize),
-            LPARAM(0x00000001),
-        );
-        let _ = PostMessageW(
-            Some(hwnd),
-            WM_CHAR,
-            WPARAM(vkey as usize),
-            LPARAM(0x00000001),
+            WPARAM(key as usize),
+            LPARAM(lparam as isize),
         );
     }
 }
@@ -543,11 +545,40 @@ pub fn key_down(hwnd: u64, vkey: i32) {
 pub fn key_up(hwnd: u64, vkey: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
     unsafe {
+        let key = vkey & 0xFF;
+        let scancode = MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC);
+        let lparam = 1 | (scancode << 16) | (0 << 24) | (1 << 30) | (1 << 31);
         let _ = PostMessageW(
             Some(hwnd),
             WM_KEYUP,
-            WPARAM(vkey as usize),
-            LPARAM(0xc0000001),
+            WPARAM(key as usize),
+            LPARAM(lparam as isize),
+        );
+    }
+}
+
+pub fn key_press(hwnd: u64, vkey: i32, duration: u64) {
+    let hwnd = HWND(hwnd as *mut c_void);
+    unsafe {
+        let key = vkey & 0xFF;
+        let scancode = MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC);
+
+        let lparam = 1 | (scancode << 16) | (0 << 24);
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(key as usize),
+            LPARAM(lparam as isize),
+        );
+
+        sleep(Duration::from_millis(duration as u64));
+
+        let lparam = 1 | (scancode << 16) | (0 << 24) | (1 << 30) | (1 << 31);
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_KEYUP,
+            WPARAM(key as usize),
+            LPARAM(lparam as isize),
         );
     }
 }
