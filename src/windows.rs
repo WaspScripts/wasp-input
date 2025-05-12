@@ -33,24 +33,15 @@ use windows::{
                 CallWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
                 GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
                 SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_USER, WNDPROC,
+                WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETFOCUS, WM_USER, WNDPROC,
             },
         },
     },
 };
 
 const WI_CONSOLE: u32 = WM_USER + 1;
-const WI_MOUSEMOVE: u32 = WM_USER + 2;
-const WI_LBUTTONDOWN: u32 = WM_USER + 3;
-const WI_LBUTTONUP: u32 = WM_USER + 4;
-const WI_RBUTTONDOWN: u32 = WM_USER + 6;
-const WI_RBUTTONUP: u32 = WM_USER + 7;
-const WI_KEYDOWN: u32 = WM_USER + 8;
-const WI_CHAR: u32 = WM_USER + 9;
-const WI_KEYUP: u32 = WM_USER + 10;
-const WI_SETFOCUS: u32 = WM_USER + 11;
-const WI_KILLFOCUS: u32 = WM_USER + 12;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
@@ -390,19 +381,9 @@ pub unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
             open_client_console();
             return LRESULT(0);
         }
-        x if x == WI_MOUSEMOVE => WM_MOUSEMOVE,
-        x if x == WI_LBUTTONDOWN => WM_LBUTTONDOWN,
-        x if x == WI_LBUTTONUP => WM_LBUTTONUP,
-        x if x == WI_RBUTTONDOWN => WM_RBUTTONDOWN,
-        x if x == WI_RBUTTONUP => WM_RBUTTONUP,
-        x if x == WI_KEYDOWN => WM_KEYDOWN,
-        x if x == WI_CHAR => WM_CHAR,
-        x if x == WI_KEYUP => WM_KEYUP,
-        x if x == WI_SETFOCUS => WM_SETFOCUS,
-        x if x == WI_KILLFOCUS => WM_KILLFOCUS,
         x if x == WM_KILLFOCUS => return LRESULT(0),
-        //x if x == WM_IME_SETCONTEXT => return LRESULT(0),
-        //x if x == WM_IME_NOTIFY => return LRESULT(0),
+        x if x == WM_IME_SETCONTEXT => return LRESULT(0),
+        x if x == WM_IME_NOTIFY => return LRESULT(0),
         _ => msg,
     };
 
@@ -487,19 +468,19 @@ pub fn get_mouse_position(hwnd: u64) -> Option<POINT> {
 
 pub fn mouse_move(hwnd: u64, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
-    let lparam = (x << 16) | y;
+    let lparam = (y << 16) | x;
     unsafe {
-        let _ = PostMessageW(Some(hwnd), WI_MOUSEMOVE, WPARAM(0), LPARAM(lparam as isize));
+        let _ = PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(lparam as isize));
     }
 }
 
 pub fn lbutton(hwnd: u64, down: bool, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
-    let lparam = (x << 16) | y;
+    let lparam = (y << 16) | x;
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            if down { WI_LBUTTONDOWN } else { WI_LBUTTONUP },
+            if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP },
             WPARAM(0),
             LPARAM(lparam as isize),
         );
@@ -508,11 +489,11 @@ pub fn lbutton(hwnd: u64, down: bool, x: i32, y: i32) {
 
 pub fn mbutton(hwnd: u64, down: bool, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
-    let lparam = (x << 16) | y;
+    let lparam = (y << 16) | x;
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            if down { WI_RBUTTONDOWN } else { WI_RBUTTONUP },
+            if down { WM_RBUTTONDOWN } else { WM_RBUTTONUP },
             WPARAM(0),
             LPARAM(lparam as isize),
         );
@@ -521,11 +502,11 @@ pub fn mbutton(hwnd: u64, down: bool, x: i32, y: i32) {
 
 pub fn rbutton(hwnd: u64, down: bool, x: i32, y: i32) {
     let hwnd = HWND(hwnd as *mut c_void);
-    let lparam = (x << 16) | y;
+    let lparam = (y << 16) | x;
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            if down { WI_RBUTTONDOWN } else { WI_RBUTTONUP },
+            if down { WM_RBUTTONDOWN } else { WM_RBUTTONUP },
             WPARAM(0),
             LPARAM(lparam as isize),
         );
@@ -534,7 +515,7 @@ pub fn rbutton(hwnd: u64, down: bool, x: i32, y: i32) {
 
 pub fn scroll(hwnd: u64, down: bool, scrolls: i32, x: i32, y: i32) {
     //let hwnd = HWND(hwnd as *mut c_void);
-    let lparam = (x << 16) | y;
+    let lparam = (y << 16) | x;
     print!(
         "[WaspInput]: TODO: scroll direction: {}, hwnd: {}, scrolls: {}, lparam: {}\r\n",
         down, hwnd, scrolls, lparam
@@ -546,13 +527,13 @@ pub fn key_down(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WI_KEYDOWN,
+            WM_KEYDOWN,
             WPARAM(vkey as usize),
             LPARAM(0x00000001),
         );
         let _ = PostMessageW(
             Some(hwnd),
-            WI_CHAR,
+            WM_CHAR,
             WPARAM(vkey as usize),
             LPARAM(0x00000001),
         );
@@ -564,7 +545,7 @@ pub fn key_up(hwnd: u64, vkey: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            WI_KEYUP,
+            WM_KEYUP,
             WPARAM(vkey as usize),
             LPARAM(0xc0000001),
         );
