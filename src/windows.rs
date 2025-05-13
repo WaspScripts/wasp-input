@@ -1,8 +1,9 @@
 use std::{
     cell::RefCell,
-    ffi::{c_char, c_void},
+    ffi::{c_char, c_int, c_void},
     mem::transmute,
     ptr::null_mut,
+    slice::from_raw_parts,
     thread::sleep,
     time::Duration,
 };
@@ -11,12 +12,11 @@ use windows::{
     core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, GetLastError, FALSE, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT,
-            POINT, RECT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+            CloseHandle, FALSE, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, RECT, TRUE,
+            WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::ScreenToClient,
         System::{
-            Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
             Memory::{
@@ -31,44 +31,25 @@ use windows::{
         },
         UI::{
             Input::KeyboardAndMouse::{
-                EnableWindow, IsWindowEnabled, MapVirtualKeyA, MAPVK_VK_TO_VSC,
+                EnableWindow, IsWindowEnabled, MapVirtualKeyA, VkKeyScanA, MAPVK_VK_TO_VSC,
             },
             WindowsAndMessaging::{
-                CallWindowProcW, EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
-                GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_KEYDOWN,
-                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_USER, WNDPROC,
+                EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos, GetWindowRect,
+                GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
             },
         },
     },
 };
 
-const WI_CONSOLE: u32 = WM_USER + 1;
+use crate::client::{open_client_console, start_thread, unhook_wndproc};
+
+pub const WI_CONSOLE: u32 = WM_USER + 1;
+pub const WI_SHIFTDOWN: u32 = WM_USER + 2;
+pub const WI_SHIFTUP: u32 = WM_USER + 3;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
-
-#[no_mangle]
-unsafe extern "system" fn start_thread(lparam: *mut c_void) -> u32 {
-    let _success = hook_wndproc(lparam as u64);
-    0
-}
-
-unsafe fn open_client_console() {
-    let hwnd = GetConsoleWindow();
-    if hwnd.0 != null_mut() {
-        if IsWindowVisible(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_HIDE);
-            return;
-        }
-
-        let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
-    }
-    if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
-        let _ = AllocConsole();
-    }
-}
 
 #[no_mangle]
 pub extern "system" fn DllMain(
@@ -320,128 +301,6 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
     }
 }
 
-static mut ORIGINAL_WNDPROC: Option<WNDPROC> = None;
-
-fn message2string(msg: u32) -> &'static str {
-    match msg {
-        0x0000 => "WM_NULL",
-        0x0001 => "WM_CREATE",
-        0x0002 => "WM_DESTROY",
-        0x0003 => "WM_MOVE",
-        0x0005 => "WM_SIZE",
-        0x000F => "WM_PAINT",
-        0x0010 => "WM_CLOSE",
-        0x0012 => "WM_QUIT",
-        0x0014 => "WM_ERASEBKGND",
-        0x0018 => "WM_SHOWWINDOW",
-        0x001C => "WM_ACTIVATEAPP",
-        0x0020 => "WM_SETCURSOR",
-        0x0021 => "WM_MOUSEACTIVATE",
-        0x0024 => "WM_GETMINMAXINFO",
-        0x0026 => "WM_PAINTICON",
-        0x0027 => "WM_ICONERASEBKGND",
-        0x0028 => "WM_NEXTDLGCTL",
-        0x002A => "WM_SPOOLERSTATUS",
-        0x002B => "WM_DRAWITEM",
-        0x002C => "WM_MEASUREITEM",
-        0x002D => "WM_DELETEITEM",
-        0x002E => "WM_VKEYTOITEM",
-        0x002F => "WM_CHARTOITEM",
-        0x0030 => "WM_SETFONT",
-        0x0031 => "WM_GETFONT",
-        0x0032 => "WM_SETHOTKEY",
-        0x0033 => "WM_GETHOTKEY",
-        0x0037 => "WM_QUERYDRAGICON",
-        0x0039 => "WM_COMPAREITEM",
-        0x0046 => "WM_WINDOWPOSCHANGING",
-        0x0047 => "WM_WINDOWPOSCHANGED",
-        0x0200 => "WM_MOUSEMOVE",
-        0x0201 => "WM_LBUTTONDOWN",
-        0x0202 => "WM_LBUTTONUP",
-        0x0204 => "WM_RBUTTONDOWN",
-        0x0205 => "WM_RBUTTONUP",
-        0x0100 => "WM_KEYDOWN",
-        0x0101 => "WM_KEYUP",
-        0x0102 => "WM_CHAR",
-        0x0007 => "WM_SETFOCUS",
-        0x0008 => "WM_KILLFOCUS",
-        0x0084 => "WM_NCHITTEST",
-        0x0104 => "WM_SYSKEYDOWN",
-        0x0105 => "WM_SYSKEYUP",
-        0x0215 => "WM_CAPTURECHANGED",
-        0x0281 => "WM_IME_SETCONTEXT",
-        0x0282 => "WM_IME_NOTIFY",
-        WI_CONSOLE => "WI_CONSOLE",
-        _ => "UNKNOWN",
-    }
-}
-
-pub unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
-    println!(
-        "[WaspInput]: message: {}, wparam: {:?}, lparam: {:?}\r\n",
-        message2string(msg),
-        wparam,
-        lparam
-    );
-
-    match msg {
-        x if x == WI_CONSOLE => {
-            open_client_console();
-            return LRESULT(0);
-        }
-        x if x == WM_KILLFOCUS => return LRESULT(0),
-        //x if x == WM_IME_SETCONTEXT => return LRESULT(0),
-        //x if x == WM_IME_NOTIFY => return LRESULT(0),
-        _ => msg,
-    };
-
-    CallWindowProcW(original, hwnd, msg, wparam, lparam)
-}
-
-pub unsafe fn hook_wndproc(hwnd: u64) -> bool {
-    let w = HWND(hwnd as *mut c_void);
-
-    if ORIGINAL_WNDPROC.is_some() {
-        println!("[WaspInput]: WndProc already hooked.\r\n");
-        return false;
-    }
-
-    let previous = SetWindowLongPtrW(w, GWLP_WNDPROC, custom_wndproc as isize);
-    if previous == 0 {
-        println!(
-            "[WaspInput]: Failed to set new WndProc: {:?}\r\n",
-            GetLastError()
-        );
-        return false;
-    }
-
-    ORIGINAL_WNDPROC = Some(transmute(previous));
-
-    println!("[WaspInput]: WndProc successfully hooked.\r\n");
-    true
-}
-
-pub unsafe fn unhook_wndproc(hwnd: u64) -> bool {
-    let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
-
-    let hwnd = HWND(hwnd as isize as *mut c_void);
-
-    if let Some(original) = original {
-        let result = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, original as isize);
-        if result == 0 {
-            println!("[WaspInput]: Failed to restore original WndProc.\r\n");
-            return false;
-        }
-        ORIGINAL_WNDPROC = None;
-        println!("[WaspInput]: WndProc successfully restored.\r\n");
-        return true;
-    }
-
-    println!("[WaspInput]: No original WndProc stored.\r\n");
-    false
-}
-
 //Input
 pub fn is_input_enabled(hwnd: u64) -> bool {
     unsafe { IsWindowEnabled(HWND(hwnd as *mut c_void)).as_bool() }
@@ -557,28 +416,82 @@ pub fn key_up(hwnd: u64, vkey: i32) {
     }
 }
 
-pub fn key_press(hwnd: u64, vkey: i32, duration: u64) {
-    let hwnd = HWND(hwnd as *mut c_void);
-    unsafe {
-        let key = vkey & 0xFF;
-        let scancode = MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC);
+fn key_press(hwnd: HWND, vkey: i32, duration: u64) {
+    let key = vkey & 0xFF;
+    let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
+    println!("[WaspInput]: vkey: {}, scancode: {}\r\n", key, scancode);
 
-        let lparam = 1 | (scancode << 16) | (0 << 24);
-        let _ = PostMessageW(
+    let lparam = 1 | (scancode << 16) | (0 << 24);
+    let _ = unsafe {
+        PostMessageW(
             Some(hwnd),
             WM_KEYDOWN,
             WPARAM(key as usize),
             LPARAM(lparam as isize),
-        );
+        )
+    };
 
-        sleep(Duration::from_millis(duration as u64));
+    sleep(Duration::from_millis(duration as u64));
 
-        let lparam = 1 | (scancode << 16) | (0 << 24) | (1 << 30) | (1 << 31);
-        let _ = PostMessageW(
+    let lparam = 1 | (scancode << 16) | (0 << 24) | (1 << 30) | (1 << 31);
+    let _ = unsafe {
+        PostMessageW(
             Some(hwnd),
             WM_KEYUP,
             WPARAM(key as usize),
             LPARAM(lparam as isize),
-        );
+        )
+    };
+}
+
+fn send_shift(hwnd: HWND, down: bool) {
+    let key = 0xA0;
+    let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
+    let message = if down { WI_SHIFTDOWN } else { WI_SHIFTUP };
+    let mut lparam = 1 | (scancode << 16) | (0 << 24);
+    if !down {
+        lparam |= (1 << 30) | (1 << 31);
+    }
+    let _ = unsafe {
+        PostMessageW(
+            Some(hwnd),
+            message,
+            WPARAM(key as usize),
+            LPARAM(lparam as isize),
+        )
+    };
+}
+
+pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_int) {
+    let hwnd = HWND(hwnd as *mut c_void);
+
+    let text_chars = unsafe { from_raw_parts(text, len as usize) };
+    let sleep_times = unsafe { from_raw_parts(sleeptimes, len as usize) };
+
+    for (i, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
+        let char = ch as u8;
+        let key = unsafe { VkKeyScanA(ch) } as i16;
+        let shift = char.is_ascii_uppercase() || char.is_ascii_punctuation();
+
+        if shift {
+            let previous = if i > 0 { text_chars[i - 1] as u8 } else { 0 };
+            if i == 0 || !(previous.is_ascii_uppercase() || previous.is_ascii_punctuation()) {
+                send_shift(hwnd, true);
+            }
+        }
+
+        key_press(hwnd, key as i32, time as u64);
+
+        if shift {
+            let next = if i + 1 < len as usize {
+                text_chars[i + 1] as u8
+            } else {
+                0
+            };
+
+            if !(next.is_ascii_uppercase() || next.is_ascii_punctuation()) {
+                send_shift(hwnd, false);
+            }
+        }
     }
 }

@@ -8,10 +8,10 @@ use std::{
     sync::Mutex,
 };
 
-use windows::Win32::{Foundation::POINT, UI::Input::KeyboardAndMouse::VkKeyScanA};
+use windows::Win32::Foundation::POINT;
 
 use crate::windows::{
-    get_jagrenderview, get_mouse_position, get_window_size, key_down, key_press, key_up, lbutton,
+    get_jagrenderview, get_mouse_position, get_window_size, key_down, key_up, keys_send, lbutton,
     mbutton, mouse_move, rbutton, scroll,
 };
 
@@ -24,7 +24,7 @@ pub struct SimbaTarget {
 lazy_static! {
     static ref TARGETS: Mutex<HashMap<u32, Box<SimbaTarget>>> = Mutex::new(HashMap::new());
     static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
-    static ref KEYBOARD_STATE: Mutex<HashMap<i32, bool>> = Mutex::new(HashMap::new());
+    static ref KEYBOARD_STATE: Mutex<[bool; 255]> = Mutex::new([false; 255]);
     static ref MOUSE_STATE: Mutex<[bool; 2]> = Mutex::new([false; 2]);
 }
 
@@ -309,7 +309,7 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
     key_down(target.hwnd, key);
 
     let mut state = KEYBOARD_STATE.lock().unwrap();
-    state.insert(key, true);
+    state[key as usize] = true;
 }
 
 #[no_mangle]
@@ -322,7 +322,7 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
     let target = unsafe { &*target };
     key_up(target.hwnd, key);
     let mut state = KEYBOARD_STATE.lock().unwrap();
-    state.insert(key, false);
+    state[key as usize] = false;
 }
 
 #[no_mangle]
@@ -349,26 +349,11 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
 
     let target = unsafe { &*target };
 
-    for i in 0..len {
-        let ch = unsafe { *text.add(i as usize) };
-        let char = ch as u8;
-        let key = unsafe { VkKeyScanA(ch) } as i16;
-        let time = unsafe { *sleeptimes.add(i as usize) };
-
-        if char.is_ascii_uppercase() || char.is_ascii_punctuation() {
-            key_down(target.hwnd, 0x10); //shift
-        }
-
-        key_press(target.hwnd, key as i32, time as u64);
-
-        if char.is_ascii_uppercase() || char.is_ascii_punctuation() {
-            key_up(target.hwnd, 0x10); //shift
-        }
-    }
+    keys_send(target.hwnd, text, len, sleeptimes);
 }
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyPressed(_target: *mut SimbaTarget, key: c_int) -> bool {
     let state = KEYBOARD_STATE.lock().unwrap();
-    *state.get(&key).unwrap_or(&false)
+    state[key as usize]
 }
