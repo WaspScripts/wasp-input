@@ -104,16 +104,11 @@ unsafe fn get_updated_wparam(wparam: WPARAM) -> WPARAM {
 
     if let Some(c) = from_u32(vkey) {
         if c.is_alphabetic() {
-            println!(
-                "[WaspInput]: IS ALPHABETICAL: {}\r\n",
-                c.to_ascii_uppercase()
-            );
             return WPARAM(c.to_ascii_uppercase() as usize);
         }
     }
 
     let scancode = MapVirtualKeyW(vkey, MAPVK_VK_TO_VSC);
-    println!("[WaspInput]: VKEY: {}, scancode: {}\r\n", vkey, scancode);
 
     let mut keyboard_state = [0u8; 256];
     let _ = GetKeyboardState(&mut keyboard_state);
@@ -125,10 +120,7 @@ unsafe fn get_updated_wparam(wparam: WPARAM) -> WPARAM {
     let _ = ToUnicode(vkey, scancode, Some(&keyboard_state), &mut buff, 0);
 
     match from_u32(buff[0] as u32) {
-        Some(unicode) => {
-            println!("[WaspInput]: unicode: {}\r\n", unicode);
-            WPARAM(unicode as usize)
-        }
+        Some(unicode) => WPARAM(unicode as usize),
         None => wparam,
     }
 }

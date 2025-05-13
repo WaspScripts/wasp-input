@@ -445,7 +445,7 @@ fn key_press(hwnd: HWND, vkey: i32, duration: u64) {
 }
 
 fn send_shift(hwnd: HWND, down: bool) {
-    let key = 0xA0;
+    let key = 0x10;
     let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
     let message = if down { WI_SHIFTDOWN } else { WI_SHIFTUP };
     let mut lparam = 1 | (scancode << 16) | (0 << 24);
@@ -462,6 +462,11 @@ fn send_shift(hwnd: HWND, down: bool) {
     };
 }
 
+const SHIFT_SYMBOLS: &[char] = &[
+    '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '=', '+', '[', '{', ']', '}', '\\', '|',
+    ';', ':', '"', ',', '<', '>', '/', '?', '~', '`',
+];
+
 pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_int) {
     let hwnd = HWND(hwnd as *mut c_void);
 
@@ -471,7 +476,7 @@ pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_in
     for (i, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
         let char = ch as u8;
         let key = unsafe { VkKeyScanA(ch) } as i16;
-        let shift = char.is_ascii_uppercase() || char.is_ascii_punctuation();
+        let shift = char.is_ascii_uppercase() || SHIFT_SYMBOLS.contains(&(char as char));
 
         if shift {
             let previous = if i > 0 { text_chars[i - 1] as u8 } else { 0 };
