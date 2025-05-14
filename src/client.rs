@@ -19,7 +19,7 @@ use windows::Win32::{
     },
 };
 
-use crate::windows::{WI_CONSOLE, WI_MODIFIERS, WI_RESET_MODIFIERS};
+use crate::windows::{WI_CONSOLE, WI_MODIFIERS};
 
 lazy_static! {
     static ref KEYBOARD_MODIFIERS: Mutex<(bool, bool, bool)> = Mutex::new((false, false, false));
@@ -99,7 +99,6 @@ fn message2string(msg: u32) -> &'static str {
         0x0282 => "WM_IME_NOTIFY",
         WI_CONSOLE => "WI_CONSOLE",
         WI_MODIFIERS => "WI_MODIFIERS",
-        WI_RESET_MODIFIERS => "WI_RESET_MODIFIERS",
         _ => "UNKNOWN",
     }
 }
@@ -112,21 +111,6 @@ fn get_modifier_lparam(key: i32, down: bool) -> LPARAM {
         lparam |= (1 << 30) | (1 << 31);
     }
     LPARAM(lparam as isize)
-}
-
-fn rebuild_key(key: u8, shift: bool, ctrl: bool, alt: bool) -> u16 {
-    let mut modifiers: u8 = 0;
-    if shift {
-        modifiers |= 0x01;
-    }
-    if ctrl {
-        modifiers |= 0x02;
-    }
-    if alt {
-        modifiers |= 0x04;
-    }
-
-    ((modifiers as u16) << 8) | (key as u16)
 }
 
 fn decode_modifiers(wparam: WPARAM) -> (bool, bool, bool) {
@@ -164,6 +148,21 @@ unsafe fn get_updated_wparam(vkey: u32, shift: bool, ctrl: bool, alt: bool) -> W
         Some(unicode) => WPARAM(unicode as usize),
         None => WPARAM(0),
     }
+}
+
+fn rebuild_key(key: u8, shift: bool, ctrl: bool, alt: bool) -> u16 {
+    let mut modifiers: u8 = 0;
+    if shift {
+        modifiers |= 0x01;
+    }
+    if ctrl {
+        modifiers |= 0x02;
+    }
+    if alt {
+        modifiers |= 0x04;
+    }
+
+    ((modifiers as u16) << 8) | (key as u16)
 }
 
 pub unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -230,43 +229,6 @@ pub unsafe fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
             if nalt {
                 *alt = !*alt;
             }
-
-            return LRESULT(0);
-        }
-        WI_RESET_MODIFIERS => {
-            let mut modifiers = KEYBOARD_MODIFIERS.lock().unwrap();
-            let (shift, ctrl, alt) = &mut *modifiers;
-
-            if *shift {
-                let lparam = get_modifier_lparam(0x10, !*shift);
-                println!(
-                    "[WaspInput]: injecting message: WM_KEYUP, wparam: WPARAM(16), lparam: {:?}\r\n",
-                    lparam
-                );
-                let _ = CallWindowProcW(original, hwnd, WM_KEYUP, WPARAM(0x10), lparam);
-            }
-
-            if *ctrl {
-                let lparam = get_modifier_lparam(0x11, !*ctrl);
-                println!(
-                    "[WaspInput]: injecting message: WM_KEYUP, wparam: WPARAM(17), lparam: {:?}\r\n",
-                    lparam
-                );
-                let _ = CallWindowProcW(original, hwnd, WM_KEYUP, WPARAM(0x11), lparam);
-            }
-
-            if *alt {
-                let lparam = get_modifier_lparam(0x12, !*alt);
-                println!(
-                    "[WaspInput]: injecting message: WM_KEYUP, wparam: WPARAM(18), lparam: {:?}\r\n",
-                    lparam
-                );
-                let _ = CallWindowProcW(original, hwnd, WM_KEYUP, WPARAM(0x12), lparam);
-            }
-
-            *shift = !*shift;
-            *ctrl = !*ctrl;
-            *alt = !*alt;
 
             return LRESULT(0);
         }

@@ -35,8 +35,8 @@ use windows::{
             },
             WindowsAndMessaging::{
                 EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos, GetWindowRect,
-                GetWindowThreadProcessId, PostMessageW, SendMessageW, WM_KEYDOWN, WM_KEYUP,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
+                GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
             },
         },
     },
@@ -46,7 +46,6 @@ use crate::client::{open_client_console, start_thread, unhook_wndproc};
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
 pub const WI_MODIFIERS: u32 = WM_USER + 2;
-pub const WI_RESET_MODIFIERS: u32 = WM_USER + 3;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
@@ -480,33 +479,15 @@ pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_in
     let sleep_times = unsafe { from_raw_parts(sleeptimes, len as usize) };
 
     let (mut pshift, mut pctrl, mut palt) = (false, false, false); //previous
-    let (mut nkey, mut nshift, mut nctrl, mut nalt) = (0x0, false, false, false); //next
-    let (mut key, mut shift, mut ctrl, mut alt); //current
 
-    let _ = unsafe { SendMessageW(hwnd, WI_RESET_MODIFIERS, Some(WPARAM(0)), Some(LPARAM(0))) };
-    for (i, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
-        if i == 0 {
-            (key, shift, ctrl, alt) = get_key_modifiers(ch);
-        } else {
-            (key, shift, ctrl, alt) = (nkey, nshift, nctrl, nalt);
-        }
-
-        println!("CH: {}, KEY: {}, i16Key: {}\r\n", ch, key, (key & 0xFF));
+    for (_, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
+        let (key, shift, ctrl, alt) = get_key_modifiers(ch);
 
         update_modifiers(hwnd, shift != pshift, ctrl != pctrl, alt != palt);
-
         key_press(hwnd, key as i32, time as u64);
-
-        //next
-        if i + 1 < len as usize {
-            (nkey, nshift, nctrl, nalt) = get_key_modifiers(text_chars[i + 1]);
-        } else {
-            (nkey, nshift, nctrl, nalt) = (0x0, false, false, false);
-        }
-
-        update_modifiers(hwnd, shift != nshift, ctrl != nctrl, alt != nalt);
 
         (pshift, pctrl, palt) = (shift, ctrl, alt);
     }
-    let _ = unsafe { SendMessageW(hwnd, WI_RESET_MODIFIERS, Some(WPARAM(0)), Some(LPARAM(0))) };
+
+    update_modifiers(hwnd, pshift, pctrl, palt);
 }
