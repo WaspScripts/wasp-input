@@ -35,8 +35,8 @@ use windows::{
             },
             WindowsAndMessaging::{
                 EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos, GetWindowRect,
-                GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
+                GetWindowThreadProcessId, PostMessageW, SendMessageW, WM_KEYDOWN, WM_KEYUP,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
             },
         },
     },
@@ -45,8 +45,8 @@ use windows::{
 use crate::client::{open_client_console, start_thread, unhook_wndproc};
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
-pub const WI_SHIFTDOWN: u32 = WM_USER + 2;
-pub const WI_SHIFTUP: u32 = WM_USER + 3;
+pub const WI_MODIFIERS: u32 = WM_USER + 2;
+pub const WI_RESET_MODIFIERS: u32 = WM_USER + 3;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
@@ -418,8 +418,7 @@ pub fn key_up(hwnd: u64, vkey: i32) {
 
 fn key_press(hwnd: HWND, vkey: i32, duration: u64) {
     let key = vkey & 0xFF;
-    let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
-    println!("[WaspInput]: vkey: {}, scancode: {}\r\n", key, scancode);
+    let scancode = unsafe { MapVirtualKeyA(vkey as u32, MAPVK_VK_TO_VSC) };
 
     let lparam = 1 | (scancode << 16) | (0 << 24);
     let _ = unsafe {
@@ -444,28 +443,35 @@ fn key_press(hwnd: HWND, vkey: i32, duration: u64) {
     };
 }
 
-fn send_shift(hwnd: HWND, down: bool) {
-    let key = 0x10;
-    let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
-    let message = if down { WI_SHIFTDOWN } else { WI_SHIFTUP };
-    let mut lparam = 1 | (scancode << 16) | (0 << 24);
-    if !down {
-        lparam |= (1 << 30) | (1 << 31);
+fn update_modifiers(hwnd: HWND, shift: bool, ctrl: bool, alt: bool) {
+    if !shift & !ctrl & !alt {
+        return;
     }
-    let _ = unsafe {
-        PostMessageW(
-            Some(hwnd),
-            message,
-            WPARAM(key as usize),
-            LPARAM(lparam as isize),
-        )
-    };
+
+    let mut wparam: usize = 0;
+    if shift {
+        wparam |= 1 << 0;
+    }
+    if ctrl {
+        wparam |= 1 << 1;
+    }
+    if alt {
+        wparam |= 1 << 2;
+    }
+
+    let _ = unsafe { PostMessageW(Some(hwnd), WI_MODIFIERS, WPARAM(wparam), LPARAM(0)) };
 }
 
-const SHIFT_SYMBOLS: &[char] = &[
-    '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '=', '+', '[', '{', ']', '}', '\\', '|',
-    ';', ':', '"', ',', '<', '>', '/', '?', '~', '`',
-];
+fn get_key_modifiers(ch: i8) -> (i16, bool, bool, bool) {
+    let key = unsafe { VkKeyScanA(ch) } as i16;
+    let modifiers = ((key >> 8) & 0xFF) as u8;
+
+    let shift = modifiers & 0x01 != 0;
+    let ctrl = modifiers & 0x02 != 0;
+    let alt = modifiers & 0x04 != 0;
+
+    (key, shift, ctrl, alt)
+}
 
 pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_int) {
     let hwnd = HWND(hwnd as *mut c_void);
@@ -473,30 +479,34 @@ pub fn keys_send(hwnd: u64, text: *mut c_char, len: c_int, sleeptimes: *mut c_in
     let text_chars = unsafe { from_raw_parts(text, len as usize) };
     let sleep_times = unsafe { from_raw_parts(sleeptimes, len as usize) };
 
-    for (i, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
-        let char = ch as u8;
-        let key = unsafe { VkKeyScanA(ch) } as i16;
-        let shift = char.is_ascii_uppercase() || SHIFT_SYMBOLS.contains(&(char as char));
+    let (mut pshift, mut pctrl, mut palt) = (false, false, false); //previous
+    let (mut nkey, mut nshift, mut nctrl, mut nalt) = (0x0, false, false, false); //next
+    let (mut key, mut shift, mut ctrl, mut alt); //current
 
-        if shift {
-            let previous = if i > 0 { text_chars[i - 1] as u8 } else { 0 };
-            if i == 0 || !(previous.is_ascii_uppercase() || previous.is_ascii_punctuation()) {
-                send_shift(hwnd, true);
-            }
+    let _ = unsafe { SendMessageW(hwnd, WI_RESET_MODIFIERS, Some(WPARAM(0)), Some(LPARAM(0))) };
+    for (i, (&ch, &time)) in text_chars.iter().zip(sleep_times.iter()).enumerate() {
+        if i == 0 {
+            (key, shift, ctrl, alt) = get_key_modifiers(ch);
+        } else {
+            (key, shift, ctrl, alt) = (nkey, nshift, nctrl, nalt);
         }
+
+        println!("CH: {}, KEY: {}, i16Key: {}\r\n", ch, key, (key & 0xFF));
+
+        update_modifiers(hwnd, shift != pshift, ctrl != pctrl, alt != palt);
 
         key_press(hwnd, key as i32, time as u64);
 
-        if shift {
-            let next = if i + 1 < len as usize {
-                text_chars[i + 1] as u8
-            } else {
-                0
-            };
-
-            if !(next.is_ascii_uppercase() || next.is_ascii_punctuation()) {
-                send_shift(hwnd, false);
-            }
+        //next
+        if i + 1 < len as usize {
+            (nkey, nshift, nctrl, nalt) = get_key_modifiers(text_chars[i + 1]);
+        } else {
+            (nkey, nshift, nctrl, nalt) = (0x0, false, false, false);
         }
+
+        update_modifiers(hwnd, shift != nshift, ctrl != nctrl, alt != nalt);
+
+        (pshift, pctrl, palt) = (shift, ctrl, alt);
     }
+    let _ = unsafe { SendMessageW(hwnd, WI_RESET_MODIFIERS, Some(WPARAM(0)), Some(LPARAM(0))) };
 }
