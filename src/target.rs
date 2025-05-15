@@ -28,7 +28,7 @@ lazy_static! {
     static ref MOUSE_STATE: Mutex<[bool; 2]> = Mutex::new([false; 2]);
 }
 
-fn get_mouse_pos(hwnd: u64) -> POINT {
+pub fn get_mouse_pos(hwnd: u64) -> POINT {
     let mut lock = MOUSE_POSITION.lock().unwrap();
     if (lock.x == -1) | (lock.y == -1) {
         match get_mouse_position(hwnd) {

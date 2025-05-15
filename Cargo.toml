@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 libc = "0.2"
+retour = "0.3"
 windows = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Foundation",
@@ -21,6 +22,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Console",
-    "Win32_Graphics_Gdi"
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_OpenGL"
 ]}
 lazy_static = "1.4"
