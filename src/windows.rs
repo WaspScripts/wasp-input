@@ -12,17 +12,15 @@ use windows::{
     core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, FALSE, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, RECT, TRUE,
-            WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+            CloseHandle, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, RECT, TRUE, WAIT_OBJECT_0,
+            WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::ScreenToClient,
         System::{
             Diagnostics::Debug::WriteProcessMemory,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
             Memory::{
-                CreateFileMappingA, MapViewOfFile, OpenFileMappingA, VirtualAllocEx, VirtualFreeEx,
-                FILE_MAP_ALL_ACCESS, FILE_MAP_READ, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
-                PAGE_READWRITE,
+                VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
             },
             Threading::{
                 CreateRemoteThread, CreateThread, GetCurrentProcessId, OpenProcess,
@@ -42,7 +40,10 @@ use windows::{
     },
 };
 
-use crate::client::{open_client_console, start_thread, unhook_wndproc};
+use crate::{
+    client::{open_client_console, start_thread, unhook_wndproc},
+    memory::{create_shared_memory, is_memory_shared, open_shared_memory},
+};
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
 pub const WI_MODIFIERS: u32 = WM_USER + 2;
@@ -68,13 +69,9 @@ pub extern "system" fn DllMain(
         1 => unsafe {
             let _ = DisableThreadLibraryCalls(hinst_dll.into());
 
-            if let Ok(hmap) =
-                OpenFileMappingA(FILE_MAP_READ.0, false, PCSTR(b"WASPINPUT_FLAG\0".as_ptr()))
-            {
-                let flag_ptr = MapViewOfFile(hmap, FILE_MAP_READ, 0, 0, 1);
-                let is_injected = *(flag_ptr.Value as *const u8);
-                if is_injected == 1 {
-                    open_client_console();
+            open_client_console();
+            if open_shared_memory() {
+                if is_memory_shared() {
                     println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
 
                     let _ = CreateThread(
@@ -104,137 +101,107 @@ pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
     transmute(func_ptr)
 }
 
-pub struct Injector;
+pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
+    create_shared_memory();
 
-impl Injector {
-    pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
-        let hmap = CreateFileMappingA(
-            HANDLE::default(),
-            None,
-            PAGE_READWRITE,
-            0,
-            1,
-            PCSTR(b"WASPINPUT_FLAG\0".as_ptr()),
-        )
-        .expect("[WaspInput]: Cannot initialize mappings.\r\n");
-
-        let flag_ptr = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, 1);
-
-        // Correct way to write to the mapped memory
-        let flag_ptr_raw = flag_ptr.Value as *mut u8;
-        *flag_ptr_raw = 1;
-
-        let process_handle = match unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid) } {
-            Ok(process) => {
-                unsafe {
-                    if WaitForSingleObject(process, 0) != WAIT_TIMEOUT {
-                        eprintln!("[WaspInput]: Process is not alive.\r\n");
-                        CloseHandle(process).ok();
-                        return false;
-                    }
-                }
-                process
-            }
-            Err(_) => {
-                eprintln!("[WaspInput]: OpenProcess failed.\r\n");
+    let process_handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
+        Ok(process) => {
+            if WaitForSingleObject(process, 0) != WAIT_TIMEOUT {
+                eprintln!("[WaspInput]: Process is not alive.\r\n");
+                CloseHandle(process).ok();
                 return false;
             }
-        };
 
-        let kernel32 = match unsafe { GetModuleHandleA(s!("kernel32.dll")) } {
-            Ok(h) => h,
-            Err(_) => {
-                eprintln!("[WaspInput]: GetModuleHandleA failed.\r\n");
-                unsafe { CloseHandle(process_handle).ok() };
-                return false;
-            }
-        };
-
-        let size = module_path.len() + 1;
-        let remote_address = unsafe {
-            VirtualAllocEx(
-                process_handle,
-                None,
-                size,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE,
-            )
-        };
-
-        if remote_address.is_null() {
-            eprintln!("[WaspInput]: VirtualAllocEx failed.\r\n");
-            unsafe { CloseHandle(process_handle).ok() };
+            process
+        }
+        Err(_) => {
+            eprintln!("[WaspInput]: OpenProcess failed.\r\n");
             return false;
         }
+    };
 
-        let mut buffer = module_path.as_bytes().to_vec();
-        buffer.push(0); // null-terminate
-
-        if unsafe {
-            WriteProcessMemory(
-                process_handle,
-                remote_address,
-                buffer.as_ptr() as _,
-                buffer.len(),
-                None,
-            )
-        }
-        .is_err()
-        {
-            eprintln!("[WaspInput]: WriteProcessMemory failed.\r\n");
-            unsafe { CloseHandle(process_handle).ok() };
-            return false;
-        }
-
-        let load_library = unsafe {
-            GetProcAddress(kernel32, s!("LoadLibraryA")).map(|addr| {
-                std::mem::transmute::<_, unsafe extern "system" fn(*mut c_void) -> u32>(addr)
-            })
-        };
-
-        let load_library = match load_library {
-            Some(f) => f,
-            None => {
-                eprintln!("[WaspInput]: GetProcAddress failed.\r\n");
-                unsafe { CloseHandle(process_handle).ok() };
-                return false;
-            }
-        };
-
-        let remote_thread = match unsafe {
-            CreateRemoteThread(
-                process_handle,
-                None,
-                0,
-                Some(load_library),
-                Some(remote_address),
-                0,
-                None,
-            )
-        } {
-            Ok(h) => h,
-            Err(_) => {
-                eprintln!("[WaspInput]: CreateRemoteThread failed\r\n");
-                unsafe { CloseHandle(process_handle).ok() };
-                return false;
-            }
-        };
-
-        let wait_result = unsafe { WaitForSingleObject(remote_thread, 5000) };
-
-        unsafe {
-            CloseHandle(remote_thread).ok();
+    let kernel32 = match GetModuleHandleA(s!("kernel32.dll")) {
+        Ok(h) => h,
+        Err(_) => {
+            eprintln!("[WaspInput]: GetModuleHandleA failed.\r\n");
             CloseHandle(process_handle).ok();
-            let _ = VirtualFreeEx(process_handle, remote_address, 0, MEM_RELEASE);
-        }
-
-        if wait_result != WAIT_OBJECT_0 {
-            eprintln!("[WaspInput]: WaitForSingleObject timed out.\r\n");
             return false;
         }
+    };
 
-        true
+    let size = module_path.len() + 1;
+    let remote_address = VirtualAllocEx(
+        process_handle,
+        None,
+        size,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE,
+    );
+
+    if remote_address.is_null() {
+        eprintln!("[WaspInput]: VirtualAllocEx failed.\r\n");
+        CloseHandle(process_handle).ok();
+        return false;
     }
+
+    let mut buffer = module_path.as_bytes().to_vec();
+    buffer.push(0); // null-terminate
+
+    if WriteProcessMemory(
+        process_handle,
+        remote_address,
+        buffer.as_ptr() as _,
+        buffer.len(),
+        None,
+    )
+    .is_err()
+    {
+        eprintln!("[WaspInput]: WriteProcessMemory failed.\r\n");
+        CloseHandle(process_handle).ok();
+        return false;
+    }
+
+    let load_library = GetProcAddress(kernel32, s!("LoadLibraryA"))
+        .map(|addr| std::mem::transmute::<_, unsafe extern "system" fn(*mut c_void) -> u32>(addr));
+
+    let load_library = match load_library {
+        Some(f) => f,
+        None => {
+            eprintln!("[WaspInput]: GetProcAddress failed.\r\n");
+            CloseHandle(process_handle).ok();
+            return false;
+        }
+    };
+
+    let thread = match CreateRemoteThread(
+        process_handle,
+        None,
+        0,
+        Some(load_library),
+        Some(remote_address),
+        0,
+        None,
+    ) {
+        Ok(thread) => thread,
+        Err(_) => {
+            eprintln!("[WaspInput]: CreateRemoteThread failed\r\n");
+            CloseHandle(process_handle).ok();
+            return false;
+        }
+    };
+
+    let wait_result = WaitForSingleObject(thread, 5000);
+
+    CloseHandle(thread).ok();
+    CloseHandle(process_handle).ok();
+    let _ = VirtualFreeEx(process_handle, remote_address, 0, MEM_RELEASE);
+
+    if wait_result != WAIT_OBJECT_0 {
+        eprintln!("[WaspInput]: WaitForSingleObject timed out.\r\n");
+        return false;
+    }
+
+    true
 }
 
 pub fn get_jagrenderview(pid: u32) -> Option<HWND> {
@@ -300,7 +267,7 @@ pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
     }
 }
 
-//Input
+//input
 pub fn is_input_enabled(hwnd: u64) -> bool {
     unsafe { IsWindowEnabled(HWND(hwnd as *mut c_void)).as_bool() }
 }

@@ -2,8 +2,9 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
+mod memory;
 mod windows;
-use windows::{get_jagrenderview, is_input_enabled, open_console, toggle_input, Injector};
+use windows::{get_jagrenderview, inject, is_input_enabled, open_console, toggle_input};
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
@@ -57,12 +58,13 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
     *PROCESS_PID.lock().unwrap() = Some(pid);
     *WINDOW_HWND.lock().unwrap() = Some(hwnd);
 
-    unsafe { Injector::inject(module_path, pid) }
+    unsafe { inject(module_path, pid) }
 }
 
 #[no_mangle]
 pub extern "C" fn OpenConsole() {
     let hwnd = WINDOW_HWND.lock().unwrap();
+
     match *hwnd {
         Some(h) => open_console(h),
         None => return,
@@ -88,6 +90,5 @@ pub extern "C" fn SetInputState(state: bool) -> bool {
 }
 
 mod client;
-//mod opengl;
 mod plugin;
 mod target;
