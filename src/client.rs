@@ -1,7 +1,6 @@
 use gl::{
-    types::{GLboolean, GLenum, GLint, GLsizei, GLsizeiptr, GLuint, GLvoid},
-    TexImage2D, BGRA, CLAMP_TO_EDGE, NEAREST, RGBA, TEXTURE_MAG_FILTER, TEXTURE_MIN_FILTER,
-    TEXTURE_RECTANGLE, TEXTURE_WRAP_S, TEXTURE_WRAP_T, UNPACK_ROW_LENGTH, UNSIGNED_BYTE,
+    types::{GLboolean, GLenum, GLint, GLsizei, GLsizeiptr, GLubyte, GLuint, GLvoid},
+    BGRA, PIXEL_PACK_BUFFER, STREAM_READ, UNPACK_ROW_LENGTH, UNSIGNED_BYTE,
 };
 //Client sided code. Everything on this file is ran on client.
 use lazy_static::lazy_static;
@@ -10,40 +9,40 @@ use std::{
     collections::HashMap,
     ffi::{c_void, CString},
     mem::transmute,
-    ptr::{addr_of, null_mut},
-    sync::{Mutex, OnceLock},
-};
-use windows::{
-    core::{BOOL, PCSTR},
-    Win32::{
-        Graphics::{
-            Gdi::{WindowFromDC, HDC},
-            OpenGL::{
-                glBegin, glBindTexture, glColor4ub, glDeleteTextures, glDisable, glEnable, glEnd,
-                glGenTextures, glGetIntegerv, glLoadIdentity, glMatrixMode, glOrtho, glPixelStorei,
-                glPopAttrib, glPopMatrix, glPushAttrib, glPushMatrix, glTexCoord2f,
-                glTexParameteri, glTexSubImage2D, glVertex2f, glViewport, wglCreateContext,
-                wglGetCurrentContext, wglGetProcAddress, wglMakeCurrent, GetPixelFormat,
-                GL_ALL_ATTRIB_BITS, GL_DEPTH_TEST, GL_MODELVIEW, GL_PROJECTION, GL_VIEWPORT, HGLRC,
-            },
-        },
-        System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
+    ptr::{null, null_mut},
+    sync::{
+        atomic::{AtomicI32, AtomicUsize, Ordering},
+        Mutex, OnceLock,
     },
 };
 
 use std::char::from_u32;
 
-use windows::Win32::{
-    Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
-    System::Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
-    UI::{
-        Input::KeyboardAndMouse::{
-            GetKeyboardState, MapVirtualKeyA, MapVirtualKeyW, ToUnicode, MAPVK_VK_TO_VSC,
+use windows::{
+    core::{BOOL, PCSTR},
+    Win32::{
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::{
+            Gdi::{WindowFromDC, HDC},
+            OpenGL::{
+                glDisable, glGetIntegerv, glLoadIdentity, glMatrixMode, glOrtho, glPixelStorei,
+                glPopAttrib, glPopMatrix, glPushAttrib, glPushMatrix, glReadPixels, glViewport,
+                wglCreateContext, wglGetCurrentContext, wglGetProcAddress, wglMakeCurrent,
+                GetPixelFormat, GL_ALL_ATTRIB_BITS, GL_DEPTH_TEST, GL_MODELVIEW, GL_PROJECTION,
+                GL_VIEWPORT, HGLRC,
+            },
         },
-        WindowsAndMessaging::{
-            CallWindowProcW, IsWindowVisible, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC, SW_HIDE,
-            SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP,
-            WM_KILLFOCUS, WNDPROC,
+        System::Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
+        System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
+        UI::{
+            Input::KeyboardAndMouse::{
+                GetKeyboardState, MapVirtualKeyA, MapVirtualKeyW, ToUnicode, MAPVK_VK_TO_VSC,
+            },
+            WindowsAndMessaging::{
+                CallWindowProcW, IsWindowVisible, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC,
+                SW_HIDE, SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN,
+                WM_KEYUP, WM_KILLFOCUS, WNDPROC,
+            },
         },
     },
 };
@@ -272,207 +271,48 @@ pub unsafe fn unhook_wndproc(hwnd: u64) {
 static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" fn(HDC) -> BOOL>> =
     OnceLock::new();
 
-static mut GL_GEN_BUFFERS: Option<unsafe extern "system" fn(n: GLsizei, buffers: *mut GLuint)> =
-    None;
-static mut GL_DELETE_BUFFERS: Option<
-    unsafe extern "system" fn(n: GLsizei, buffers: *const GLuint),
-> = None;
-static mut GL_BIND_BUFFER: Option<unsafe extern "system" fn(target: GLenum, buffer: GLuint)> = None;
-static mut GL_BUFFER_DATA: Option<
-    unsafe extern "system" fn(target: GLenum, size: GLsizeiptr, data: *const GLvoid, usage: GLenum),
-> = None;
-static mut GL_MAP_BUFFER: Option<
-    unsafe extern "system" fn(target: GLenum, access: GLenum) -> *mut c_void,
-> = None;
-static mut GL_UNMAP_BUFFER: Option<unsafe extern "system" fn(target: GLenum) -> GLboolean> = None;
+type GlGenBuffersFn = unsafe extern "system" fn(n: GLsizei, buffers: *mut GLuint);
+type GlDeleteBuffersFn = unsafe extern "system" fn(n: GLsizei, buffers: *const GLuint);
+type GlBindBufferFn = unsafe extern "system" fn(target: GLenum, buffer: GLuint);
+type GlBufferDataFn =
+    unsafe extern "system" fn(target: GLenum, size: GLsizeiptr, data: *const GLvoid, usage: GLenum);
+type GlMapBufferFn = unsafe extern "system" fn(target: GLenum, access: GLenum) -> *mut c_void;
+type GlUnmapBufferFn = unsafe extern "system" fn(target: GLenum) -> GLboolean;
 
-unsafe fn load_opengl_extensions() -> bool {
-    if GL_GEN_BUFFERS.is_none() {
-        let load_fn = |name: &str| -> *const std::ffi::c_void {
-            let cname = CString::new(name).unwrap();
-            let pcstr = PCSTR(cname.as_ptr() as *const u8);
-            if let Some(ptr) = wglGetProcAddress(pcstr) {
-                ptr as *const std::ffi::c_void
-            } else {
-                std::ptr::null()
-            }
-        };
+static GL_GEN_BUFFERS: OnceLock<GlGenBuffersFn> = OnceLock::new();
+static GL_DELETE_BUFFERS: OnceLock<GlDeleteBuffersFn> = OnceLock::new();
+static GL_BIND_BUFFER: OnceLock<GlBindBufferFn> = OnceLock::new();
+static GL_BUFFER_DATA: OnceLock<GlBufferDataFn> = OnceLock::new();
+static GL_MAP_BUFFER: OnceLock<GlMapBufferFn> = OnceLock::new();
+static GL_UNMAP_BUFFER: OnceLock<GlUnmapBufferFn> = OnceLock::new();
 
-        GL_GEN_BUFFERS = {
-            let ptr = load_fn("glGenBuffers");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-
-        GL_DELETE_BUFFERS = {
-            let ptr = load_fn("glDeleteBuffers");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-
-        GL_BIND_BUFFER = {
-            let ptr = load_fn("glBindBuffer");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-
-        GL_BUFFER_DATA = {
-            let ptr = load_fn("glBufferData");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-
-        GL_MAP_BUFFER = {
-            let ptr = load_fn("glMapBuffer");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-
-        GL_UNMAP_BUFFER = {
-            let ptr = load_fn("glUnmapBuffer");
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::mem::transmute(ptr))
-            }
-        };
-    }
-
-    GL_GEN_BUFFERS.is_some()
-        && GL_DELETE_BUFFERS.is_some()
-        && GL_BIND_BUFFER.is_some()
-        && GL_BUFFER_DATA.is_some()
-        && GL_MAP_BUFFER.is_some()
-        && GL_UNMAP_BUFFER.is_some()
-}
-
-#[repr(C)]
-struct Pixel {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-unsafe fn convert(source: *mut Pixel, size: usize) {
-    for i in 0..size {
-        let pixel = source.add(i);
-        let r = (*pixel).r;
-        let g = (*pixel).g;
-        let b = (*pixel).b;
-        let a = (*pixel).a;
-
-        (*pixel).a = if r == 0 && g == 0 && b == 0 && a == 0 {
-            0x00
-        } else {
-            0xFF
-        };
-    }
-}
-
-static mut TEXTURE_ID: GLuint = 0;
-static mut TEXTURE_WIDTH: i32 = 0;
-static mut TEXTURE_HEIGHT: i32 = 0;
-
-pub unsafe fn gl_draw_image(
-    _ctx: *mut c_void,
-    source_buffer: *mut c_void,
-    x: f32,
-    y: f32,
-    width: i32,
-    height: i32,
-    _stride: i32,
-) {
-    let gl_format = BGRA;
-    let size = (width * height) as usize;
-
-    convert(source_buffer as *mut Pixel, size);
-
-    let target = TEXTURE_RECTANGLE;
-
-    if TEXTURE_ID == 0 || TEXTURE_WIDTH != width || TEXTURE_HEIGHT != height {
-        if TEXTURE_ID != 0 {
-            glDeleteTextures(1, addr_of!(TEXTURE_ID));
+pub unsafe fn load_opengl_extensions() -> bool {
+    let load_fn = |name: &str| -> *const c_void {
+        let cname = CString::new(name).unwrap();
+        let pcstr = PCSTR(cname.as_ptr() as *const u8);
+        match wglGetProcAddress(pcstr) {
+            Some(f) => f as *const c_void,
+            None => null(),
         }
+    };
 
-        let mut tex_id = 0;
-        glGenTextures(1, &mut tex_id);
-        glBindTexture(target, tex_id);
-
-        glPixelStorei(UNPACK_ROW_LENGTH, width);
-        TexImage2D(
-            target,
-            0,
-            RGBA as GLint,
-            width,
-            height,
-            0,
-            gl_format,
-            UNSIGNED_BYTE,
-            source_buffer,
-        );
-        glPixelStorei(UNPACK_ROW_LENGTH, 0);
-
-        glTexParameteri(target, TEXTURE_WRAP_S, CLAMP_TO_EDGE as i32);
-        glTexParameteri(target, TEXTURE_WRAP_T, CLAMP_TO_EDGE as i32);
-        glTexParameteri(target, TEXTURE_MIN_FILTER, NEAREST as i32);
-        glTexParameteri(target, TEXTURE_MAG_FILTER, NEAREST as i32);
-
-        TEXTURE_ID = tex_id;
-        TEXTURE_WIDTH = width;
-        TEXTURE_HEIGHT = height;
-    } else {
-        glBindTexture(target, TEXTURE_ID);
-        glPixelStorei(UNPACK_ROW_LENGTH, width);
-        glTexSubImage2D(
-            target,
-            0,
-            0,
-            0,
-            width,
-            height,
-            gl_format,
-            UNSIGNED_BYTE,
-            source_buffer,
-        );
-        glPixelStorei(UNPACK_ROW_LENGTH, 0);
-        glBindTexture(target, 0);
+    macro_rules! load {
+        ($sym:ident, $type:ty, $name:literal) => {{
+            let ptr = load_fn($name);
+            if ptr.is_null() {
+                return false;
+            }
+            $sym.set(std::mem::transmute::<*const c_void, $type>(ptr))
+                .is_ok()
+        }};
     }
 
-    let (x1, y1, x2, y2) = (x, y, x + width as f32, y + height as f32);
-
-    glEnable(target);
-    glBindTexture(target, TEXTURE_ID);
-    glColor4ub(0xFF, 0xFF, 0xFF, 0xFF);
-
-    glBegin(gl::QUADS);
-    glTexCoord2f(0.0, height as f32);
-    glVertex2f(x1, y1);
-    glTexCoord2f(0.0, 0.0);
-    glVertex2f(x1, y2);
-    glTexCoord2f(width as f32, 0.0);
-    glVertex2f(x2, y2);
-    glTexCoord2f(width as f32, height as f32);
-    glVertex2f(x2, y1);
-    glEnd();
-
-    glBindTexture(target, 0);
-    glDisable(target);
+    load!(GL_GEN_BUFFERS, GlGenBuffersFn, "glGenBuffers")
+        && load!(GL_DELETE_BUFFERS, GlDeleteBuffersFn, "glDeleteBuffers")
+        && load!(GL_BIND_BUFFER, GlBindBufferFn, "glBindBuffer")
+        && load!(GL_BUFFER_DATA, GlBufferDataFn, "glBufferData")
+        && load!(GL_MAP_BUFFER, GlMapBufferFn, "glMapBuffer")
+        && load!(GL_UNMAP_BUFFER, GlUnmapBufferFn, "glUnmapBuffer")
 }
 
 #[derive(Copy, Clone)]
@@ -483,6 +323,111 @@ unsafe impl Sync for SafeHGLRC {}
 
 lazy_static! {
     static ref CONTEXTS: Mutex<HashMap<i32, SafeHGLRC>> = Mutex::new(HashMap::new());
+}
+
+static WIDTH: AtomicI32 = AtomicI32::new(0);
+static HEIGHT: AtomicI32 = AtomicI32::new(0);
+
+pub unsafe fn generate_pixel_buffers(
+    pbo: &mut [GLuint; 2],
+    width: GLint,
+    height: GLint,
+    stride: GLint,
+) {
+    let w = WIDTH.load(Ordering::Relaxed);
+    let h = HEIGHT.load(Ordering::Relaxed);
+
+    if (w != width) || (h != height) {
+        let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
+        let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
+        let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
+        let gl_delete_buffers = *GL_DELETE_BUFFERS.get().unwrap();
+
+        WIDTH.store(width, Ordering::Relaxed);
+        HEIGHT.store(height, Ordering::Relaxed);
+
+        if pbo[1] != 0 {
+            gl_delete_buffers(2, pbo.as_ptr());
+            pbo[0] = 0;
+            pbo[1] = 0;
+        }
+
+        gl_gen_buffers(2, pbo.as_mut_ptr());
+
+        let buffer_size = (width * height * stride) as GLsizeiptr;
+
+        gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[0]);
+        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
+        gl_bind_buffer(gl::PIXEL_PACK_BUFFER, 0);
+
+        gl_bind_buffer(gl::PIXEL_PACK_BUFFER, pbo[1]);
+        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
+        gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
+    }
+}
+
+static INDEX: AtomicUsize = AtomicUsize::new(0);
+
+pub fn flip_image_bytes(input: *const u8, output: *mut u8, width: i32, height: i32, bpp: u32) {
+    let chunk = if bpp > 24 {
+        (width as usize) * 4
+    } else {
+        (width as usize) * 3 + (width as usize) % 4
+    };
+
+    unsafe {
+        let mut source = input.add(chunk * (height as usize - 1));
+        let mut destination = output;
+
+        while source != input {
+            std::ptr::copy_nonoverlapping(source, destination, chunk);
+            destination = destination.add(chunk);
+            source = source.sub(chunk);
+        }
+    }
+}
+
+pub unsafe fn read_pixel_buffers(
+    dest: *mut GLubyte,
+    pbo: &mut [GLuint; 2],
+    width: GLint,
+    height: GLint,
+) {
+    let index_cell = INDEX.load(Ordering::Relaxed);
+    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
+    let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
+    let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
+
+    let gl_format = BGRA;
+    // Swap indices
+    let index = (index_cell + 1) % 2;
+    let next_index = (index + 1) % 2;
+    INDEX.store(index, Ordering::Relaxed);
+
+    glPixelStorei(UNPACK_ROW_LENGTH, width);
+    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[index]);
+    glReadPixels(0, 0, width, height, gl_format, UNSIGNED_BYTE, null_mut());
+    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[next_index]);
+
+    let data = gl_map_buffer(gl::PIXEL_PACK_BUFFER, gl::READ_ONLY);
+
+    if !data.is_null() {
+        flip_image_bytes(data as *const u8, dest.cast(), width, height, 32);
+        gl_unmap_buffer(PIXEL_PACK_BUFFER);
+    } else {
+        glReadPixels(
+            0,
+            0,
+            width,
+            height,
+            gl_format,
+            gl::UNSIGNED_BYTE,
+            dest as *mut _,
+        );
+    }
+
+    gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
+    glPixelStorei(UNPACK_ROW_LENGTH, 0);
 }
 
 unsafe fn push_gl_context(hdc: HDC, width: i32, height: i32) {
@@ -515,6 +460,10 @@ unsafe fn pop_gl_context(hdc: HDC, ctx: HGLRC) {
     let _ = wglMakeCurrent(hdc, ctx);
 }
 
+lazy_static! {
+    static ref PBO: Mutex<[GLuint; 2]> = Mutex::new([0; 2]);
+}
+
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let hwnd = WindowFromDC(hdc);
     let mouse = get_mouse_pos(hwnd.0 as u64);
@@ -528,23 +477,16 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let height = viewport[3];
 
     if load_opengl_extensions() {
-        let old_ctx = wglGetCurrentContext();
-        push_gl_context(hdc, width, height);
-
-        let src = get_debug_image(width as usize, height as usize);
-
-        if !src.is_null() {
-            println!("HERE\r\n");
-            gl_draw_image(
-                hdc.0 as *mut c_void,
-                src as *mut c_void,
-                0.0,
-                0.0,
-                width as i32,
-                height as i32,
-                4,
-            );
+        let dest = get_debug_image(width as usize, height as usize);
+        if !dest.is_null() {
+            let mut pbo = PBO.lock().unwrap();
+            generate_pixel_buffers(&mut *pbo, width, height, 4);
+            read_pixel_buffers(dest, &mut *pbo, width, height);
         }
+
+        let old_ctx = wglGetCurrentContext();
+
+        push_gl_context(hdc, width, height);
 
         //println!("MOUSE: {:?}\r\n", mouse);
 
