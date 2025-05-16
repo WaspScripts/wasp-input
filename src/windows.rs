@@ -251,17 +251,16 @@ pub fn get_jagrenderview(pid: u32) -> Option<HWND> {
     }
 }
 
-pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
+pub fn get_window_size(hwnd: u64) -> (i32, i32) {
     unsafe {
         let hwnd = hwnd as *mut c_void;
-
         let mut rect = RECT::default();
         if GetWindowRect(HWND(hwnd), &mut rect).is_ok() {
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
-            Some((width, height))
+            (width, height)
         } else {
-            None
+            (-1, -1)
         }
     }
 }

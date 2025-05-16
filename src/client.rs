@@ -361,12 +361,6 @@ unsafe fn load_opengl_extensions() -> bool {
         && GL_UNMAP_BUFFER.is_some()
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ImageFormat {
-    BgrBgra,
-    BGRA,
-}
-
 #[repr(C)]
 struct Pixel {
     r: u8,
@@ -375,13 +369,19 @@ struct Pixel {
     a: u8,
 }
 
-unsafe fn convert(source: *mut Pixel, size: usize, format: ImageFormat) {
-    if let ImageFormat::BgrBgra = format {
-        for i in 0..size {
-            let pixel = source.add(i);
-            let value = *(pixel as *const u32);
-            (*pixel).a = if value == 0x00 { 0x00 } else { 0xFF };
-        }
+unsafe fn convert(source: *mut Pixel, size: usize) {
+    for i in 0..size {
+        let pixel = source.add(i);
+        let r = (*pixel).r;
+        let g = (*pixel).g;
+        let b = (*pixel).b;
+        let a = (*pixel).a;
+
+        (*pixel).a = if r == 0 && g == 0 && b == 0 && a == 0 {
+            0x00
+        } else {
+            0xFF
+        };
     }
 }
 
@@ -397,18 +397,14 @@ pub unsafe fn gl_draw_image(
     width: i32,
     height: i32,
     _stride: i32,
-    format: ImageFormat,
 ) {
     let gl_format = BGRA;
-    println!("HERE0\r\n");
-
     let size = (width * height) as usize;
-    println!("HERE0,1\r\n");
-    convert(source_buffer as *mut Pixel, size, format);
-    println!("HERE1\r\n");
+
+    convert(source_buffer as *mut Pixel, size);
 
     let target = TEXTURE_RECTANGLE;
-    println!("HERE2\r\n");
+
     if TEXTURE_ID == 0 || TEXTURE_WIDTH != width || TEXTURE_HEIGHT != height {
         if TEXTURE_ID != 0 {
             glDeleteTextures(1, addr_of!(TEXTURE_ID));
@@ -457,13 +453,13 @@ pub unsafe fn gl_draw_image(
         glPixelStorei(UNPACK_ROW_LENGTH, 0);
         glBindTexture(target, 0);
     }
-    println!("HERE3\r\n");
+
     let (x1, y1, x2, y2) = (x, y, x + width as f32, y + height as f32);
-    println!("HERE4\r\n");
+
     glEnable(target);
     glBindTexture(target, TEXTURE_ID);
     glColor4ub(0xFF, 0xFF, 0xFF, 0xFF);
-    println!("HERE5\r\n");
+
     glBegin(gl::QUADS);
     glTexCoord2f(0.0, height as f32);
     glVertex2f(x1, y1);
@@ -474,10 +470,9 @@ pub unsafe fn gl_draw_image(
     glTexCoord2f(width as f32, height as f32);
     glVertex2f(x2, y1);
     glEnd();
-    println!("HERE6\r\n");
+
     glBindTexture(target, 0);
     glDisable(target);
-    println!("HERE7\r\n");
 }
 
 #[derive(Copy, Clone)]
@@ -531,14 +526,15 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
 
     let width = viewport[2];
     let height = viewport[3];
-    //println!("Viewport: width = {}, height = {}", width, height);
 
     if load_opengl_extensions() {
         let old_ctx = wglGetCurrentContext();
         push_gl_context(hdc, width, height);
 
         let src = get_debug_image(width as usize, height as usize);
+
         if !src.is_null() {
+            println!("HERE\r\n");
             gl_draw_image(
                 hdc.0 as *mut c_void,
                 src as *mut c_void,
@@ -547,7 +543,6 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
                 width as i32,
                 height as i32,
                 4,
-                ImageFormat::BgrBgra,
             );
         }
 

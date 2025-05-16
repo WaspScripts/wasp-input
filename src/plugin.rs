@@ -192,14 +192,11 @@ pub unsafe extern "C" fn RegisterSimbaPlugin(
     info: *const TSimbaInfomation,
     methods: *const TSimbaMethods,
 ) {
-    println!("Plugin Registering:!\r\n");
     if info.is_null() || methods.is_null() {
         return;
     }
 
     let major = (*info).simba_major;
-
-    println!("  Version: {}!\r\n", major);
 
     if major < 2000 {
         let dst_info = addr_of_mut!(PLUGIN_SIMBA_INFO) as *mut _ as *mut u8;

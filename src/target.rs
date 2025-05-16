@@ -10,8 +10,7 @@ use std::{
 use windows::Win32::Foundation::POINT;
 
 use crate::{
-    memory::{get_debug_image, get_image_data, get_target_dimensions, image_buffer},
-    plugin::PLUGIN_SIMBA_METHODS,
+    memory::{get_img_ptr, image_buffer},
     windows::{
         get_jagrenderview, get_mouse_position, get_window_size, key_down, key_up, keys_send,
         lbutton, mbutton, mouse_move, rbutton, scroll,
@@ -86,12 +85,8 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
     }
 
     if !image.is_null() {
-        let mut width: i32 = 0;
-        let mut height: i32 = 0;
 
-        get_target_dimensions(&mut width, &mut height);
-
-        unsafe {
+        /* unsafe {
             let external_image_create = PLUGIN_SIMBA_METHODS
                 .external_image_create
                 .expect("external_image_create function pointer is null");
@@ -108,7 +103,7 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
                 width,
                 height,
             );
-        }
+        } */
     }
 
     target
@@ -141,17 +136,11 @@ pub extern "C" fn SimbaPluginTarget_GetDimensions(
     }
 
     let target = TARGET.lock().unwrap();
+    let (w, h) = get_window_size(target.hwnd);
 
-    if let Some((w, h)) = get_window_size(target.hwnd) {
-        unsafe {
-            *width = w;
-            *height = h;
-        }
-    } else {
-        unsafe {
-            *width = 0;
-            *height = 0;
-        }
+    unsafe {
+        *width = w;
+        *height = h;
     }
 }
 
@@ -160,7 +149,7 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
     target: *mut SimbaTarget,
     x: c_int,
     y: c_int,
-    width: c_int,
+    _width: c_int,
     _height: c_int,
     bgra: *mut *mut c_void,
     data_width: *mut c_int,
@@ -180,15 +169,19 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
         return false;
     }
 
-    let ptr = unsafe { get_image_data() };
+    let target = TARGET.lock().unwrap();
+    let (w, h) = get_window_size(target.hwnd);
+
+    let ptr = unsafe { get_img_ptr() };
     if ptr.is_null() {
         return false;
     }
 
-    // Calculate pointer offset to the pixel data
-    let image_ptr = unsafe { image_buffer(ptr) };
-    let offset = ((y * (width) + x) * 4) as isize;
-    unsafe { *bgra = image_ptr.offset(offset) as *mut c_void };
+    unsafe { *data_width = w };
+
+    let img_data = unsafe { image_buffer(w as usize, h as usize, ptr) };
+    let offset = ((y * (w) + x) * 4) as isize;
+    unsafe { *bgra = img_data.offset(offset) as *mut c_void };
 
     true
 }
