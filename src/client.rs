@@ -1,12 +1,12 @@
+//Client sided code. Everything on this file is ran on client.
 use gl::{
     types::{GLboolean, GLenum, GLint, GLsizei, GLsizeiptr, GLubyte, GLuint, GLvoid},
     BGRA, PIXEL_PACK_BUFFER, STREAM_READ, UNPACK_ROW_LENGTH, UNSIGNED_BYTE,
 };
-//Client sided code. Everything on this file is ran on client.
+
 use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
-    collections::HashMap,
     ffi::{c_void, CString},
     mem::transmute,
     ptr::{null, null_mut},
@@ -21,19 +21,18 @@ use std::char::from_u32;
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Gdi::{WindowFromDC, HDC},
             OpenGL::{
-                glDisable, glGetIntegerv, glLoadIdentity, glMatrixMode, glOrtho, glPixelStorei,
-                glPopAttrib, glPopMatrix, glPushAttrib, glPushMatrix, glReadPixels, glViewport,
-                wglCreateContext, wglGetCurrentContext, wglGetProcAddress, wglMakeCurrent,
-                GetPixelFormat, GL_ALL_ATTRIB_BITS, GL_DEPTH_TEST, GL_MODELVIEW, GL_PROJECTION,
-                GL_VIEWPORT, HGLRC,
+                glColor4ub, glGetIntegerv, glPixelStorei, glReadPixels, wglGetProcAddress,
+                GL_VIEWPORT,
             },
         },
-        System::Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
-        System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
+        System::{
+            Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+        },
         UI::{
             Input::KeyboardAndMouse::{
                 GetKeyboardState, MapVirtualKeyA, MapVirtualKeyW, ToUnicode, MAPVK_VK_TO_VSC,
@@ -41,15 +40,16 @@ use windows::{
             WindowsAndMessaging::{
                 CallWindowProcW, IsWindowVisible, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC,
                 SW_HIDE, SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN,
-                WM_KEYUP, WM_KILLFOCUS, WNDPROC,
+                WM_KEYUP, WM_KILLFOCUS, WM_MOUSEMOVE, WNDPROC,
             },
         },
     },
 };
 
 use crate::{
+    graphics::gl_draw_point,
     memory::get_debug_image,
-    target::get_mouse_pos,
+    target::{get_mouse_pos, MOUSE_POSITION},
     windows::{WI_CONSOLE, WI_MODIFIERS},
 };
 
@@ -223,6 +223,14 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
         WM_KILLFOCUS => return LRESULT(0),
         WM_IME_SETCONTEXT => return LRESULT(0),
         WM_IME_NOTIFY => return LRESULT(0),
+        WM_MOUSEMOVE => {
+            let x = (lparam.0 & 0xFFFF) as u16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i32;
+            let mut lock = MOUSE_POSITION.lock().unwrap();
+            *lock = POINT { x: x, y: y };
+
+            WM_MOUSEMOVE
+        }
         _ => msg,
     };
 
@@ -313,16 +321,6 @@ pub unsafe fn load_opengl_extensions() -> bool {
         && load!(GL_BUFFER_DATA, GlBufferDataFn, "glBufferData")
         && load!(GL_MAP_BUFFER, GlMapBufferFn, "glMapBuffer")
         && load!(GL_UNMAP_BUFFER, GlUnmapBufferFn, "glUnmapBuffer")
-}
-
-#[derive(Copy, Clone)]
-struct SafeHGLRC(HGLRC);
-
-unsafe impl Send for SafeHGLRC {}
-unsafe impl Sync for SafeHGLRC {}
-
-lazy_static! {
-    static ref CONTEXTS: Mutex<HashMap<i32, SafeHGLRC>> = Mutex::new(HashMap::new());
 }
 
 static WIDTH: AtomicI32 = AtomicI32::new(0);
@@ -430,46 +428,14 @@ pub unsafe fn read_pixel_buffers(
     glPixelStorei(UNPACK_ROW_LENGTH, 0);
 }
 
-unsafe fn push_gl_context(hdc: HDC, width: i32, height: i32) {
-    let pixelformat = GetPixelFormat(hdc);
-
-    let mut contexts = CONTEXTS.lock().unwrap();
-    if !contexts.contains_key(&pixelformat) {
-        let ctx = wglCreateContext(hdc).expect("Failed to create OpenGL context");
-        contexts.insert(pixelformat, SafeHGLRC(ctx));
-    }
-
-    let SafeHGLRC(ctx) = *contexts.get(&pixelformat).unwrap();
-    let _ = wglMakeCurrent(hdc, ctx);
-
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-
-    glPushMatrix();
-    glViewport(0, 0, width, height);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, width as f64, 0.0, height as f64, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    glDisable(GL_DEPTH_TEST);
-}
-
-unsafe fn pop_gl_context(hdc: HDC, ctx: HGLRC) {
-    glPopMatrix();
-    glPopAttrib();
-    let _ = wglMakeCurrent(hdc, ctx);
-}
-
 lazy_static! {
     static ref PBO: Mutex<[GLuint; 2]> = Mutex::new([0; 2]);
 }
 
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
+    let mut viewport = [0, 0, 0, 0];
     let hwnd = WindowFromDC(hdc);
     let mouse = get_mouse_pos(hwnd.0 as u64);
-    let _ = mouse;
-
-    let mut viewport = [0, 0, 0, 0];
 
     glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
 
@@ -484,13 +450,10 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
             read_pixel_buffers(dest, &mut *pbo, width, height);
         }
 
-        let old_ctx = wglGetCurrentContext();
-
-        push_gl_context(hdc, width, height);
-
-        //println!("MOUSE: {:?}\r\n", mouse);
-
-        pop_gl_context(hdc, old_ctx);
+        if (mouse.x > -1) && (mouse.y > -1) && (mouse.x < width) && (mouse.y < height) {
+            glColor4ub(0xFF, 0x00, 0x00, 0xFF);
+            gl_draw_point(mouse.x as f32, mouse.y as f32, 0.0, 4 as f32);
+        }
     }
 
     let detour = ORIGINAL_WGL_SWAPBUFFERS.get().unwrap();

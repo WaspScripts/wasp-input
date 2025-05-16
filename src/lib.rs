@@ -91,5 +91,6 @@ pub extern "C" fn SetInputState(state: bool) -> bool {
 }
 
 mod client;
+mod graphics;
 mod plugin;
 mod target;

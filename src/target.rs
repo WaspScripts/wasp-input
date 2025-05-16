@@ -1,4 +1,5 @@
 //Target related methods for Simba 2.0
+
 use lazy_static::lazy_static;
 use std::{
     ffi::CStr,
@@ -25,7 +26,7 @@ pub struct SimbaTarget {
 
 lazy_static! {
     pub static ref TARGET: Mutex<SimbaTarget> = Mutex::new(SimbaTarget { pid: 0, hwnd: 0 });
-    static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
+    pub static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
     static ref KEYBOARD_STATE: Mutex<[bool; 255]> = Mutex::new([false; 255]);
     static ref MOUSE_STATE: Mutex<[bool; 2]> = Mutex::new([false; 2]);
 }
