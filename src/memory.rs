@@ -1,5 +1,6 @@
 use std::{
-    ptr::{copy_nonoverlapping, null_mut},
+    ffi::c_void,
+    ptr::null_mut,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
@@ -62,7 +63,7 @@ pub unsafe fn open_shared_memory() -> bool {
     true
 }
 
-pub unsafe fn is_memory_shared() -> bool {
+pub unsafe fn is_mapped() -> bool {
     let ptr = MAP_PTR.load(Ordering::Acquire);
     if ptr.is_null() {
         return false;
@@ -70,53 +71,49 @@ pub unsafe fn is_memory_shared() -> bool {
     *ptr == 1
 }
 
-//random tests below...
-pub unsafe fn write_shared_message(message: &str) -> bool {
-    println!("write\r\n");
-    let ptr = MAP_PTR.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return false;
-    }
-    println!("write1\r\n");
-
-    let ptr = ptr.add(1);
-    let msg_ptr = ptr.add(1);
-
-    let bytes = message.as_bytes();
-    if bytes.len() > BUFFER_SIZE - 2 {
-        return false;
-    }
-
-    println!("write2\r\n");
-    copy_nonoverlapping(bytes.as_ptr(), msg_ptr, bytes.len());
-    *msg_ptr.add(bytes.len()) = 0;
-
-    *ptr = 1;
-    true
+pub unsafe fn image_buffer(image_data: *mut c_void) -> *mut u8 {
+    const EIOSDATA_SIZE: usize = 128;
+    (image_data as *mut u8).add(EIOSDATA_SIZE)
 }
 
-pub unsafe fn read_shared_message() -> Option<String> {
-    println!("read\r\n");
+pub unsafe fn get_image_data() -> *mut c_void {
     let ptr = MAP_PTR.load(Ordering::Acquire);
     if ptr.is_null() {
-        return None;
+        return null_mut();
     }
 
-    println!("read1\r\n");
     let flag_ptr = ptr.add(1);
-
     if *flag_ptr == 0 {
-        return None;
+        return null_mut();
     }
 
-    println!("read2\r\n");
-    let msg_ptr = ptr.add(1);
-    let slice = std::slice::from_raw_parts(msg_ptr, BUFFER_SIZE - 2);
-    let msg = std::str::from_utf8(slice)
-        .ok()?
-        .trim_end_matches('\0')
-        .to_string();
+    flag_ptr as *mut c_void
+}
 
-    *ptr = 0;
-    Some(msg)
+unsafe fn debug_image_buffer(
+    image_data: *mut c_void,
+    image_width: usize,
+    image_height: usize,
+) -> *mut u8 {
+    let base = image_buffer(image_data);
+    base.add(image_width * image_height * 4)
+}
+
+pub unsafe fn get_debug_image(width: usize, height: usize) -> *mut u8 {
+    let img_ptr = get_image_data();
+    if img_ptr.is_null() {
+        null_mut()
+    } else {
+        debug_image_buffer(img_ptr, width, height)
+    }
+}
+
+pub fn get_target_dimensions(width: &mut i32, height: &mut i32) {
+    if unsafe { !is_mapped() } {
+        *width = 100; //placeholder
+        *height = 100; //placeholder
+        return;
+    }
+    *width = -1;
+    *height = -1;
 }

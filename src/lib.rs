@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 mod memory;
 mod windows;
+use target::{SimbaTarget, TARGET};
 use windows::{get_jagrenderview, inject, is_input_enabled, open_console, toggle_input};
 
 // Pascal types as tuples (name, definition)
@@ -55,8 +56,8 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
         }
     };
 
-    *PROCESS_PID.lock().unwrap() = Some(pid);
-    *WINDOW_HWND.lock().unwrap() = Some(hwnd);
+    let mut target = TARGET.lock().unwrap();
+    *target = SimbaTarget { pid, hwnd };
 
     unsafe { inject(module_path, pid) }
 }

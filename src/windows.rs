@@ -42,7 +42,7 @@ use windows::{
 
 use crate::{
     client::{open_client_console, start_thread, unhook_wndproc},
-    memory::{create_shared_memory, is_memory_shared, open_shared_memory},
+    memory::{create_shared_memory, is_mapped, open_shared_memory},
 };
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
@@ -71,7 +71,7 @@ pub extern "system" fn DllMain(
 
             open_client_console();
             if open_shared_memory() {
-                if is_memory_shared() {
+                if is_mapped() {
                     println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
 
                     let _ = CreateThread(
@@ -253,8 +253,7 @@ pub fn get_jagrenderview(pid: u32) -> Option<HWND> {
 
 pub fn get_window_size(hwnd: u64) -> Option<(i32, i32)> {
     unsafe {
-        // Convert u64 back to a raw pointer (*mut c_void), and then into HWND
-        let hwnd = hwnd as *mut c_void; // Convert the u64 back to HWND (pointer)
+        let hwnd = hwnd as *mut c_void;
 
         let mut rect = RECT::default();
         if GetWindowRect(HWND(hwnd), &mut rect).is_ok() {
@@ -410,7 +409,7 @@ fn key_press(hwnd: HWND, vkey: i32, duration: u64) {
 }
 
 fn update_modifiers(hwnd: HWND, shift: bool, ctrl: bool, alt: bool) {
-    if !shift & !ctrl & !alt {
+    if !shift && !ctrl && !alt {
         return;
     }
 

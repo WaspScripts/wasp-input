@@ -1,18 +1,31 @@
+use gl::{
+    types::{GLboolean, GLenum, GLint, GLsizei, GLsizeiptr, GLuint, GLvoid},
+    TexImage2D, BGRA, CLAMP_TO_EDGE, NEAREST, RGBA, TEXTURE_MAG_FILTER, TEXTURE_MIN_FILTER,
+    TEXTURE_RECTANGLE, TEXTURE_WRAP_S, TEXTURE_WRAP_T, UNPACK_ROW_LENGTH, UNSIGNED_BYTE,
+};
 //Client sided code. Everything on this file is ran on client.
 use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
-    ffi::c_void,
+    collections::HashMap,
+    ffi::{c_void, CString},
     mem::transmute,
-    ptr::null_mut,
+    ptr::{addr_of, null_mut},
     sync::{Mutex, OnceLock},
 };
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
         Graphics::{
-            Gdi::HDC,
-            OpenGL::{glGetIntegerv, GL_VIEWPORT},
+            Gdi::{WindowFromDC, HDC},
+            OpenGL::{
+                glBegin, glBindTexture, glColor4ub, glDeleteTextures, glDisable, glEnable, glEnd,
+                glGenTextures, glGetIntegerv, glLoadIdentity, glMatrixMode, glOrtho, glPixelStorei,
+                glPopAttrib, glPopMatrix, glPushAttrib, glPushMatrix, glTexCoord2f,
+                glTexParameteri, glTexSubImage2D, glVertex2f, glViewport, wglCreateContext,
+                wglGetCurrentContext, wglGetProcAddress, wglMakeCurrent, GetPixelFormat,
+                GL_ALL_ATTRIB_BITS, GL_DEPTH_TEST, GL_MODELVIEW, GL_PROJECTION, GL_VIEWPORT, HGLRC,
+            },
         },
         System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
     },
@@ -35,7 +48,11 @@ use windows::Win32::{
     },
 };
 
-use crate::windows::{WI_CONSOLE, WI_MODIFIERS};
+use crate::{
+    memory::get_debug_image,
+    target::get_mouse_pos,
+    windows::{WI_CONSOLE, WI_MODIFIERS},
+};
 
 lazy_static! {
     static ref KEYBOARD_MODIFIERS: Mutex<(bool, bool, bool)> = Mutex::new((false, false, false));
@@ -65,61 +82,6 @@ pub unsafe fn open_client_console() {
 
 //WndProc hook
 static mut ORIGINAL_WNDPROC: Option<WNDPROC> = None;
-
-fn message2string(msg: u32) -> &'static str {
-    match msg {
-        0x0000 => "WM_NULL",
-        0x0001 => "WM_CREATE",
-        0x0002 => "WM_DESTROY",
-        0x0003 => "WM_MOVE",
-        0x0005 => "WM_SIZE",
-        0x000F => "WM_PAINT",
-        0x0010 => "WM_CLOSE",
-        0x0012 => "WM_QUIT",
-        0x0014 => "WM_ERASEBKGND",
-        0x0018 => "WM_SHOWWINDOW",
-        0x001C => "WM_ACTIVATEAPP",
-        0x0020 => "WM_SETCURSOR",
-        0x0021 => "WM_MOUSEACTIVATE",
-        0x0024 => "WM_GETMINMAXINFO",
-        0x0026 => "WM_PAINTICON",
-        0x0027 => "WM_ICONERASEBKGND",
-        0x0028 => "WM_NEXTDLGCTL",
-        0x002A => "WM_SPOOLERSTATUS",
-        0x002B => "WM_DRAWITEM",
-        0x002C => "WM_MEASUREITEM",
-        0x002D => "WM_DELETEITEM",
-        0x002E => "WM_VKEYTOITEM",
-        0x002F => "WM_CHARTOITEM",
-        0x0030 => "WM_SETFONT",
-        0x0031 => "WM_GETFONT",
-        0x0032 => "WM_SETHOTKEY",
-        0x0033 => "WM_GETHOTKEY",
-        0x0037 => "WM_QUERYDRAGICON",
-        0x0039 => "WM_COMPAREITEM",
-        0x0046 => "WM_WINDOWPOSCHANGING",
-        0x0047 => "WM_WINDOWPOSCHANGED",
-        0x0200 => "WM_MOUSEMOVE",
-        0x0201 => "WM_LBUTTONDOWN",
-        0x0202 => "WM_LBUTTONUP",
-        0x0204 => "WM_RBUTTONDOWN",
-        0x0205 => "WM_RBUTTONUP",
-        WM_KEYDOWN => "WM_KEYDOWN",
-        WM_KEYUP => "WM_KEYUP",
-        WM_CHAR => "WM_CHAR",
-        0x0007 => "WM_SETFOCUS",
-        WM_KILLFOCUS => "WM_KILLFOCUS",
-        0x0084 => "WM_NCHITTEST",
-        0x0104 => "WM_SYSKEYDOWN",
-        0x0105 => "WM_SYSKEYUP",
-        0x0215 => "WM_CAPTURECHANGED",
-        0x0281 => "WM_IME_SETCONTEXT",
-        0x0282 => "WM_IME_NOTIFY",
-        WI_CONSOLE => "WI_CONSOLE",
-        WI_MODIFIERS => "WI_MODIFIERS",
-        _ => "UNKNOWN",
-    }
-}
 
 fn get_modifier_lparam(key: i32, down: bool) -> LPARAM {
     let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
@@ -185,12 +147,6 @@ fn rebuild_key(key: u8, shift: bool, ctrl: bool, alt: bool) -> u16 {
 
 unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
-    println!(
-        "[WaspInput]: message: {}, wparam: {:?}, lparam: {:?}\r\n",
-        message2string(msg),
-        wparam,
-        lparam
-    );
 
     match msg {
         WI_CONSOLE => {
@@ -205,36 +161,18 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             if nshift {
                 let msg = if *shift { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x10, !*shift);
-                println!(
-                    "[WaspInput]: injecting message: {}, wparam: {:?}, lparam: {:?}\r\n",
-                    message2string(msg),
-                    WPARAM(0x10),
-                    lparam
-                );
                 let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x10), lparam);
             }
 
             if nctrl {
                 let msg = if *ctrl { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x11, !*ctrl);
-                println!(
-                    "[WaspInput]: injecting message: {}, wparam: {:?}, lparam: {:?}\r\n",
-                    message2string(msg),
-                    WPARAM(0x11),
-                    lparam
-                );
                 let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x11), lparam);
             }
 
             if nalt {
                 let msg = if *alt { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x12, !*alt);
-                println!(
-                    "[WaspInput]: injecting message: {}, wparam: {:?}, lparam: {:?}\r\n",
-                    message2string(msg),
-                    WPARAM(0x12),
-                    lparam
-                );
                 let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x12), lparam);
             }
 
@@ -334,18 +272,288 @@ pub unsafe fn unhook_wndproc(hwnd: u64) {
 static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" fn(HDC) -> BOOL>> =
     OnceLock::new();
 
-unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
-    let mut viewport = [0, 0, 0, 0];
-    unsafe {
-        glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
+static mut GL_GEN_BUFFERS: Option<unsafe extern "system" fn(n: GLsizei, buffers: *mut GLuint)> =
+    None;
+static mut GL_DELETE_BUFFERS: Option<
+    unsafe extern "system" fn(n: GLsizei, buffers: *const GLuint),
+> = None;
+static mut GL_BIND_BUFFER: Option<unsafe extern "system" fn(target: GLenum, buffer: GLuint)> = None;
+static mut GL_BUFFER_DATA: Option<
+    unsafe extern "system" fn(target: GLenum, size: GLsizeiptr, data: *const GLvoid, usage: GLenum),
+> = None;
+static mut GL_MAP_BUFFER: Option<
+    unsafe extern "system" fn(target: GLenum, access: GLenum) -> *mut c_void,
+> = None;
+static mut GL_UNMAP_BUFFER: Option<unsafe extern "system" fn(target: GLenum) -> GLboolean> = None;
+
+unsafe fn load_opengl_extensions() -> bool {
+    if GL_GEN_BUFFERS.is_none() {
+        let load_fn = |name: &str| -> *const std::ffi::c_void {
+            let cname = CString::new(name).unwrap();
+            let pcstr = PCSTR(cname.as_ptr() as *const u8);
+            if let Some(ptr) = wglGetProcAddress(pcstr) {
+                ptr as *const std::ffi::c_void
+            } else {
+                std::ptr::null()
+            }
+        };
+
+        GL_GEN_BUFFERS = {
+            let ptr = load_fn("glGenBuffers");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
+
+        GL_DELETE_BUFFERS = {
+            let ptr = load_fn("glDeleteBuffers");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
+
+        GL_BIND_BUFFER = {
+            let ptr = load_fn("glBindBuffer");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
+
+        GL_BUFFER_DATA = {
+            let ptr = load_fn("glBufferData");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
+
+        GL_MAP_BUFFER = {
+            let ptr = load_fn("glMapBuffer");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
+
+        GL_UNMAP_BUFFER = {
+            let ptr = load_fn("glUnmapBuffer");
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(ptr))
+            }
+        };
     }
+
+    GL_GEN_BUFFERS.is_some()
+        && GL_DELETE_BUFFERS.is_some()
+        && GL_BIND_BUFFER.is_some()
+        && GL_BUFFER_DATA.is_some()
+        && GL_MAP_BUFFER.is_some()
+        && GL_UNMAP_BUFFER.is_some()
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ImageFormat {
+    BgrBgra,
+    BGRA,
+}
+
+#[repr(C)]
+struct Pixel {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+unsafe fn convert(source: *mut Pixel, size: usize, format: ImageFormat) {
+    if let ImageFormat::BgrBgra = format {
+        for i in 0..size {
+            let pixel = source.add(i);
+            let value = *(pixel as *const u32);
+            (*pixel).a = if value == 0x00 { 0x00 } else { 0xFF };
+        }
+    }
+}
+
+static mut TEXTURE_ID: GLuint = 0;
+static mut TEXTURE_WIDTH: i32 = 0;
+static mut TEXTURE_HEIGHT: i32 = 0;
+
+pub unsafe fn gl_draw_image(
+    _ctx: *mut c_void,
+    source_buffer: *mut c_void,
+    x: f32,
+    y: f32,
+    width: i32,
+    height: i32,
+    _stride: i32,
+    format: ImageFormat,
+) {
+    let gl_format = BGRA;
+    println!("HERE0\r\n");
+
+    let size = (width * height) as usize;
+    println!("HERE0,1\r\n");
+    convert(source_buffer as *mut Pixel, size, format);
+    println!("HERE1\r\n");
+
+    let target = TEXTURE_RECTANGLE;
+    println!("HERE2\r\n");
+    if TEXTURE_ID == 0 || TEXTURE_WIDTH != width || TEXTURE_HEIGHT != height {
+        if TEXTURE_ID != 0 {
+            glDeleteTextures(1, addr_of!(TEXTURE_ID));
+        }
+
+        let mut tex_id = 0;
+        glGenTextures(1, &mut tex_id);
+        glBindTexture(target, tex_id);
+
+        glPixelStorei(UNPACK_ROW_LENGTH, width);
+        TexImage2D(
+            target,
+            0,
+            RGBA as GLint,
+            width,
+            height,
+            0,
+            gl_format,
+            UNSIGNED_BYTE,
+            source_buffer,
+        );
+        glPixelStorei(UNPACK_ROW_LENGTH, 0);
+
+        glTexParameteri(target, TEXTURE_WRAP_S, CLAMP_TO_EDGE as i32);
+        glTexParameteri(target, TEXTURE_WRAP_T, CLAMP_TO_EDGE as i32);
+        glTexParameteri(target, TEXTURE_MIN_FILTER, NEAREST as i32);
+        glTexParameteri(target, TEXTURE_MAG_FILTER, NEAREST as i32);
+
+        TEXTURE_ID = tex_id;
+        TEXTURE_WIDTH = width;
+        TEXTURE_HEIGHT = height;
+    } else {
+        glBindTexture(target, TEXTURE_ID);
+        glPixelStorei(UNPACK_ROW_LENGTH, width);
+        glTexSubImage2D(
+            target,
+            0,
+            0,
+            0,
+            width,
+            height,
+            gl_format,
+            UNSIGNED_BYTE,
+            source_buffer,
+        );
+        glPixelStorei(UNPACK_ROW_LENGTH, 0);
+        glBindTexture(target, 0);
+    }
+    println!("HERE3\r\n");
+    let (x1, y1, x2, y2) = (x, y, x + width as f32, y + height as f32);
+    println!("HERE4\r\n");
+    glEnable(target);
+    glBindTexture(target, TEXTURE_ID);
+    glColor4ub(0xFF, 0xFF, 0xFF, 0xFF);
+    println!("HERE5\r\n");
+    glBegin(gl::QUADS);
+    glTexCoord2f(0.0, height as f32);
+    glVertex2f(x1, y1);
+    glTexCoord2f(0.0, 0.0);
+    glVertex2f(x1, y2);
+    glTexCoord2f(width as f32, 0.0);
+    glVertex2f(x2, y2);
+    glTexCoord2f(width as f32, height as f32);
+    glVertex2f(x2, y1);
+    glEnd();
+    println!("HERE6\r\n");
+    glBindTexture(target, 0);
+    glDisable(target);
+    println!("HERE7\r\n");
+}
+
+#[derive(Copy, Clone)]
+struct SafeHGLRC(HGLRC);
+
+unsafe impl Send for SafeHGLRC {}
+unsafe impl Sync for SafeHGLRC {}
+
+lazy_static! {
+    static ref CONTEXTS: Mutex<HashMap<i32, SafeHGLRC>> = Mutex::new(HashMap::new());
+}
+
+unsafe fn push_gl_context(hdc: HDC, width: i32, height: i32) {
+    let pixelformat = GetPixelFormat(hdc);
+
+    let mut contexts = CONTEXTS.lock().unwrap();
+    if !contexts.contains_key(&pixelformat) {
+        let ctx = wglCreateContext(hdc).expect("Failed to create OpenGL context");
+        contexts.insert(pixelformat, SafeHGLRC(ctx));
+    }
+
+    let SafeHGLRC(ctx) = *contexts.get(&pixelformat).unwrap();
+    let _ = wglMakeCurrent(hdc, ctx);
+
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+
+    glPushMatrix();
+    glViewport(0, 0, width, height);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, width as f64, 0.0, height as f64, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+}
+
+unsafe fn pop_gl_context(hdc: HDC, ctx: HGLRC) {
+    glPopMatrix();
+    glPopAttrib();
+    let _ = wglMakeCurrent(hdc, ctx);
+}
+
+unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
+    let hwnd = WindowFromDC(hdc);
+    let mouse = get_mouse_pos(hwnd.0 as u64);
+    let _ = mouse;
+
+    let mut viewport = [0, 0, 0, 0];
+
+    glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
+
     let width = viewport[2];
     let height = viewport[3];
-    println!("Viewport: width = {}, height = {}", width, height);
+    //println!("Viewport: width = {}, height = {}", width, height);
 
-    //Arbitrarily chosen by brandon originally on RI
-    if (width >= 200) & (height >= 200) {
-        // TODO: share img with Simba, draw.
+    if load_opengl_extensions() {
+        let old_ctx = wglGetCurrentContext();
+        push_gl_context(hdc, width, height);
+
+        let src = get_debug_image(width as usize, height as usize);
+        if !src.is_null() {
+            gl_draw_image(
+                hdc.0 as *mut c_void,
+                src as *mut c_void,
+                0.0,
+                0.0,
+                width as i32,
+                height as i32,
+                4,
+                ImageFormat::BgrBgra,
+            );
+        }
+
+        //println!("MOUSE: {:?}\r\n", mouse);
+
+        pop_gl_context(hdc, old_ctx);
     }
 
     let detour = ORIGINAL_WGL_SWAPBUFFERS.get().unwrap();
@@ -355,13 +563,16 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
 unsafe fn hook_wgl_swap_buffers() {
     let module = GetModuleHandleA(PCSTR(b"opengl32.dll\0".as_ptr())).unwrap();
     let addr = GetProcAddress(module, PCSTR(b"wglSwapBuffers\0".as_ptr()))
-        .expect("wglSwapBuffers not found");
+        .expect("[WaspInput]: wglSwapBuffers not found\r\n");
 
     let original_fn: unsafe extern "system" fn(HDC) -> BOOL = std::mem::transmute(addr);
-    let detour =
-        GenericDetour::new(original_fn, hooked_wgl_swap_buffers).expect("Failed to create hook");
+    let detour = GenericDetour::new(original_fn, hooked_wgl_swap_buffers)
+        .expect("[WaspInput]: Failed to create wglSwapBuffers hook\r\n");
 
-    detour.enable().expect("Failed to enable hook");
+    detour
+        .enable()
+        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook\r\n");
 
     ORIGINAL_WGL_SWAPBUFFERS.set(detour).unwrap();
+    println!("[WaspInput]: wglSwapBuffers successfully hooked.\r\n");
 }
