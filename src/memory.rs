@@ -83,13 +83,3 @@ pub unsafe fn get_img_ptr() -> *mut c_void {
 
     ptr.add(1) as *mut c_void
 }
-
-pub unsafe fn get_debug_image(width: usize, height: usize) -> *mut u8 {
-    let img_ptr = get_img_ptr();
-    if img_ptr.is_null() {
-        null_mut()
-    } else {
-        let ptr = image_buffer(width, height, img_ptr);
-        ptr.add(width * height * 4)
-    }
-}

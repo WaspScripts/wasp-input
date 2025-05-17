@@ -1,19 +1,13 @@
 //Client sided code. Everything on this file is ran on client.
-use gl::{
-    types::{GLboolean, GLenum, GLint, GLsizei, GLsizeiptr, GLubyte, GLuint, GLvoid},
-    BGRA, PIXEL_PACK_BUFFER, STREAM_READ, UNPACK_ROW_LENGTH, UNSIGNED_BYTE,
-};
 
+use gl::types::GLuint;
 use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
-    ffi::{c_void, CString},
+    ffi::c_void,
     mem::transmute,
-    ptr::{null, null_mut},
-    sync::{
-        atomic::{AtomicI32, AtomicUsize, Ordering},
-        Mutex, OnceLock,
-    },
+    ptr::null_mut,
+    sync::{Mutex, OnceLock},
 };
 
 use std::char::from_u32;
@@ -24,10 +18,7 @@ use windows::{
         Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Gdi::{WindowFromDC, HDC},
-            OpenGL::{
-                glColor4ub, glGetIntegerv, glPixelStorei, glReadPixels, wglGetProcAddress,
-                GL_VIEWPORT,
-            },
+            OpenGL::{glGetIntegerv, GL_VIEWPORT},
         },
         System::{
             Console::{AllocConsole, AttachConsole, GetConsoleWindow, ATTACH_PARENT_PROCESS},
@@ -47,8 +38,10 @@ use windows::{
 };
 
 use crate::{
-    graphics::gl_draw_point,
-    memory::get_debug_image,
+    graphics::{
+        draw_pt, generate_pixel_buffers, gl_draw_point, load_opengl_extensions, read_pixel_buffers,
+    },
+    memory::get_img_ptr,
     target::{get_mouse_pos, MOUSE_POSITION},
     windows::{WI_CONSOLE, WI_MODIFIERS},
 };
@@ -279,155 +272,6 @@ pub unsafe fn unhook_wndproc(hwnd: u64) {
 static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" fn(HDC) -> BOOL>> =
     OnceLock::new();
 
-type GlGenBuffersFn = unsafe extern "system" fn(n: GLsizei, buffers: *mut GLuint);
-type GlDeleteBuffersFn = unsafe extern "system" fn(n: GLsizei, buffers: *const GLuint);
-type GlBindBufferFn = unsafe extern "system" fn(target: GLenum, buffer: GLuint);
-type GlBufferDataFn =
-    unsafe extern "system" fn(target: GLenum, size: GLsizeiptr, data: *const GLvoid, usage: GLenum);
-type GlMapBufferFn = unsafe extern "system" fn(target: GLenum, access: GLenum) -> *mut c_void;
-type GlUnmapBufferFn = unsafe extern "system" fn(target: GLenum) -> GLboolean;
-
-static GL_GEN_BUFFERS: OnceLock<GlGenBuffersFn> = OnceLock::new();
-static GL_DELETE_BUFFERS: OnceLock<GlDeleteBuffersFn> = OnceLock::new();
-static GL_BIND_BUFFER: OnceLock<GlBindBufferFn> = OnceLock::new();
-static GL_BUFFER_DATA: OnceLock<GlBufferDataFn> = OnceLock::new();
-static GL_MAP_BUFFER: OnceLock<GlMapBufferFn> = OnceLock::new();
-static GL_UNMAP_BUFFER: OnceLock<GlUnmapBufferFn> = OnceLock::new();
-
-pub unsafe fn load_opengl_extensions() -> bool {
-    let load_fn = |name: &str| -> *const c_void {
-        let cname = CString::new(name).unwrap();
-        let pcstr = PCSTR(cname.as_ptr() as *const u8);
-        match wglGetProcAddress(pcstr) {
-            Some(f) => f as *const c_void,
-            None => null(),
-        }
-    };
-
-    macro_rules! load {
-        ($sym:ident, $type:ty, $name:literal) => {{
-            let ptr = load_fn($name);
-            if ptr.is_null() {
-                return false;
-            }
-            $sym.set(std::mem::transmute::<*const c_void, $type>(ptr))
-                .is_ok()
-        }};
-    }
-
-    load!(GL_GEN_BUFFERS, GlGenBuffersFn, "glGenBuffers")
-        && load!(GL_DELETE_BUFFERS, GlDeleteBuffersFn, "glDeleteBuffers")
-        && load!(GL_BIND_BUFFER, GlBindBufferFn, "glBindBuffer")
-        && load!(GL_BUFFER_DATA, GlBufferDataFn, "glBufferData")
-        && load!(GL_MAP_BUFFER, GlMapBufferFn, "glMapBuffer")
-        && load!(GL_UNMAP_BUFFER, GlUnmapBufferFn, "glUnmapBuffer")
-}
-
-static WIDTH: AtomicI32 = AtomicI32::new(0);
-static HEIGHT: AtomicI32 = AtomicI32::new(0);
-
-pub unsafe fn generate_pixel_buffers(
-    pbo: &mut [GLuint; 2],
-    width: GLint,
-    height: GLint,
-    stride: GLint,
-) {
-    let w = WIDTH.load(Ordering::Relaxed);
-    let h = HEIGHT.load(Ordering::Relaxed);
-
-    if (w != width) || (h != height) {
-        let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
-        let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
-        let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-        let gl_delete_buffers = *GL_DELETE_BUFFERS.get().unwrap();
-
-        WIDTH.store(width, Ordering::Relaxed);
-        HEIGHT.store(height, Ordering::Relaxed);
-
-        if pbo[1] != 0 {
-            gl_delete_buffers(2, pbo.as_ptr());
-            pbo[0] = 0;
-            pbo[1] = 0;
-        }
-
-        gl_gen_buffers(2, pbo.as_mut_ptr());
-
-        let buffer_size = (width * height * stride) as GLsizeiptr;
-
-        gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[0]);
-        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
-        gl_bind_buffer(gl::PIXEL_PACK_BUFFER, 0);
-
-        gl_bind_buffer(gl::PIXEL_PACK_BUFFER, pbo[1]);
-        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
-        gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
-    }
-}
-
-static INDEX: AtomicUsize = AtomicUsize::new(0);
-
-pub fn flip_image_bytes(input: *const u8, output: *mut u8, width: i32, height: i32, bpp: u32) {
-    let chunk = if bpp > 24 {
-        (width as usize) * 4
-    } else {
-        (width as usize) * 3 + (width as usize) % 4
-    };
-
-    unsafe {
-        let mut source = input.add(chunk * (height as usize - 1));
-        let mut destination = output;
-
-        while source != input {
-            std::ptr::copy_nonoverlapping(source, destination, chunk);
-            destination = destination.add(chunk);
-            source = source.sub(chunk);
-        }
-    }
-}
-
-pub unsafe fn read_pixel_buffers(
-    dest: *mut GLubyte,
-    pbo: &mut [GLuint; 2],
-    width: GLint,
-    height: GLint,
-) {
-    let index_cell = INDEX.load(Ordering::Relaxed);
-    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-    let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
-    let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
-
-    let gl_format = BGRA;
-    // Swap indices
-    let index = (index_cell + 1) % 2;
-    let next_index = (index + 1) % 2;
-    INDEX.store(index, Ordering::Relaxed);
-
-    glPixelStorei(UNPACK_ROW_LENGTH, width);
-    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[index]);
-    glReadPixels(0, 0, width, height, gl_format, UNSIGNED_BYTE, null_mut());
-    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[next_index]);
-
-    let data = gl_map_buffer(gl::PIXEL_PACK_BUFFER, gl::READ_ONLY);
-
-    if !data.is_null() {
-        flip_image_bytes(data as *const u8, dest.cast(), width, height, 32);
-        gl_unmap_buffer(PIXEL_PACK_BUFFER);
-    } else {
-        glReadPixels(
-            0,
-            0,
-            width,
-            height,
-            gl_format,
-            gl::UNSIGNED_BYTE,
-            dest as *mut _,
-        );
-    }
-
-    gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
-    glPixelStorei(UNPACK_ROW_LENGTH, 0);
-}
-
 lazy_static! {
     static ref PBO: Mutex<[GLuint; 2]> = Mutex::new([0; 2]);
 }
@@ -443,16 +287,16 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let height = viewport[3];
 
     if load_opengl_extensions() {
-        let dest = get_debug_image(width as usize, height as usize);
+        let dest = get_img_ptr();
         if !dest.is_null() {
             let mut pbo = PBO.lock().unwrap();
             generate_pixel_buffers(&mut *pbo, width, height, 4);
-            read_pixel_buffers(dest, &mut *pbo, width, height);
+            read_pixel_buffers(dest as *mut u8, &mut *pbo, width, height);
         }
 
         if (mouse.x > -1) && (mouse.y > -1) && (mouse.x < width) && (mouse.y < height) {
-            glColor4ub(0xFF, 0x00, 0x00, 0xFF);
-            gl_draw_point(mouse.x as f32, mouse.y as f32, 0.0, 4 as f32);
+            println!("Mouse: {:?}\r\n", mouse);
+            draw_pt(mouse.x, mouse.y, width, height);
         }
     }
 
