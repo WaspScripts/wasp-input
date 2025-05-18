@@ -41,7 +41,7 @@ use windows::{
 };
 
 use crate::{
-    client::{open_client_console, start_thread, unhook_wndproc},
+    client::{start_thread, unhook_wndproc},
     memory::{MemoryManager, MEMORY_MANAGER},
 };
 
@@ -69,7 +69,6 @@ pub extern "system" fn DllMain(
         1 => unsafe {
             let _ = DisableThreadLibraryCalls(hinst_dll.into());
 
-            open_client_console();
             let mem_manager = MEMORY_MANAGER.lock().unwrap();
 
             if mem_manager.is_mapped() {

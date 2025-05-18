@@ -129,7 +129,7 @@ pub unsafe fn load_opengl_extensions() -> bool {
 }
 
 lazy_static! {
-    static ref PBO_DATA: Mutex<(u32, i32)> = Mutex::new((0, 0));
+    static ref PBO_DATA: Mutex<(Vec<u32>, i32, usize)> = Mutex::new((vec![0, 0], 0, 0)); // (PBOs, size, index)
 }
 
 pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
@@ -138,55 +138,62 @@ pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
     }
 
     let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
+    let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
+    let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
 
     let mut pbo_data = PBO_DATA.lock().unwrap();
+    let (ref mut pbos, ref mut old_size, ref mut index) = *pbo_data;
 
-    let (pbo, old_size) = *pbo_data;
-    let mut recalculated = false;
+    let row_stride = (width * 4) as usize;
 
-    if pbo == 0 {
-        recalculated = true;
+    if pbos[0] == 0 {
         let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
         let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
-        let mut new_pbo = 0;
+
         unsafe {
-            gl_gen_buffers(1, &mut new_pbo);
-            gl_bind_buffer(PIXEL_PACK_BUFFER, new_pbo);
-            *pbo_data = (new_pbo, size);
-            gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
+            gl_gen_buffers(2, pbos.as_mut_ptr());
+            for &pbo in pbos.iter() {
+                gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
+                gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
+            }
         }
-    } else if size != old_size {
-        //Resize PBO if dimensions changed
-        recalculated = true;
+
+        *old_size = size;
+    } else if *old_size != size {
         let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
         unsafe {
-            gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
-            gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
+            for &pbo in pbos.iter() {
+                gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
+                gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
+            }
         }
-        *pbo_data = (pbo, size);
+
+        *old_size = size;
     }
 
+    let read_index = *index;
+    let map_index = (read_index + 1) % 2;
+
     unsafe {
-        if !recalculated {
-            gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
-        }
+        // Read pixels into the read_index PBO
+        gl_bind_buffer(PIXEL_PACK_BUFFER, pbos[read_index]);
         glReadPixels(0, 0, width, height, BGRA, UNSIGNED_BYTE, null_mut());
 
-        let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
-        let pbo_ptr = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY) as *const u8;
+        // Map the previous frame's PBO to read its contents
+        gl_bind_buffer(PIXEL_PACK_BUFFER, pbos[map_index]);
+        let ptr = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY) as *const u8;
 
-        if !pbo_ptr.is_null() {
-            let row_stride = (width * 4) as usize;
-
+        if !ptr.is_null() {
             for row in 0..height as usize {
-                let src_row_start = pbo_ptr.add(row * row_stride);
-                let dest_row_start = dest.add((height as usize - 1 - row) * row_stride);
-                copy_nonoverlapping(src_row_start, dest_row_start, row_stride);
+                let src_row = ptr.add(row * row_stride);
+                let dest_row = dest.add((height as usize - 1 - row) * row_stride);
+                copy_nonoverlapping(src_row, dest_row, row_stride);
             }
 
-            let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
-            gl_unmap_buffer(PIXEL_PACK_BUFFER);
+            gl_unmap_buffer(PIXEL_PACK_BUFFER); // Optional but recommended
         }
+
+        *index = map_index; // Swap indices
     }
 }
 
