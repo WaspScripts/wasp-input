@@ -174,10 +174,10 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
 
     let mem_manager = MEMORY_MANAGER.lock().unwrap();
 
-    let (w, h) = unsafe { mem_manager.get_dimensions() };
+    let (w, _h) = unsafe { mem_manager.get_dimensions() };
     unsafe { *data_width = w };
 
-    let img_data = unsafe { mem_manager.image_buffer(w as usize, h as usize) };
+    let img_data = unsafe { mem_manager.image_ptr() };
     let offset = ((y * (w) + x) * 4) as isize;
     unsafe { *bgra = img_data.offset(offset) as *mut c_void };
 

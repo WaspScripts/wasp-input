@@ -1,25 +1,19 @@
+use lazy_static::lazy_static;
 use std::{
     ffi::{c_void, CString},
-    ptr::{null, null_mut},
-    sync::{
-        atomic::{AtomicI32, AtomicUsize, Ordering},
-        OnceLock,
-    },
+    ptr::{copy_nonoverlapping, null, null_mut},
+    sync::{Mutex, OnceLock},
 };
 
 use gl::{
-    types::{
-        GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLubyte, GLuint, GLvoid,
-    },
-    BGRA, FRAGMENT_SHADER, PIXEL_PACK_BUFFER, POINTS, READ_ONLY, STREAM_READ, UNPACK_ROW_LENGTH,
-    UNSIGNED_BYTE, VERTEX_SHADER,
+    types::{GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLuint, GLvoid},
+    BGRA, FRAGMENT_SHADER, PIXEL_PACK_BUFFER, POINTS, READ_ONLY, STREAM_READ, UNSIGNED_BYTE,
+    VERTEX_SHADER,
 };
 
 use windows::{
     core::PCSTR,
-    Win32::Graphics::OpenGL::{
-        glDrawArrays, glPixelStorei, glPointSize, glReadPixels, wglGetProcAddress,
-    },
+    Win32::Graphics::OpenGL::{glDrawArrays, glPointSize, glReadPixels, wglGetProcAddress},
 };
 
 type GlGenBuffersFn = unsafe extern "system" fn(n: GLsizei, buffers: *mut GLuint);
@@ -134,100 +128,66 @@ pub unsafe fn load_opengl_extensions() -> bool {
         && load!(GL_UNIFORM_2FV, GLUniform2Fv, "glUniform2fv")
 }
 
-static WIDTH: AtomicI32 = AtomicI32::new(0);
-static HEIGHT: AtomicI32 = AtomicI32::new(0);
+lazy_static! {
+    static ref PBO_DATA: Mutex<(u32, i32)> = Mutex::new((0, 0));
+}
 
-pub unsafe fn generate_pixel_buffers(
-    pbo: &mut [GLuint; 2],
-    width: GLint,
-    height: GLint,
-    stride: GLint,
-) {
-    let w = WIDTH.load(Ordering::Relaxed);
-    let h = HEIGHT.load(Ordering::Relaxed);
+pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
+    if dest.is_null() {
+        return;
+    }
 
-    if (w != width) || (h != height) {
+    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
+
+    let mut pbo_data = PBO_DATA.lock().unwrap();
+
+    let (pbo, old_size) = *pbo_data;
+    let mut recalculated = false;
+
+    if pbo == 0 {
+        recalculated = true;
         let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
         let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
-        let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-        let gl_delete_buffers = *GL_DELETE_BUFFERS.get().unwrap();
-
-        WIDTH.store(width, Ordering::Relaxed);
-        HEIGHT.store(height, Ordering::Relaxed);
-
-        if pbo[1] != 0 {
-            gl_delete_buffers(2, pbo.as_ptr());
-            pbo[0] = 0;
-            pbo[1] = 0;
+        let mut new_pbo = 0;
+        unsafe {
+            gl_gen_buffers(1, &mut new_pbo);
+            gl_bind_buffer(PIXEL_PACK_BUFFER, new_pbo);
+            *pbo_data = (new_pbo, size);
+            gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
         }
-
-        gl_gen_buffers(2, pbo.as_mut_ptr());
-
-        let buffer_size = (width * height * stride) as GLsizeiptr;
-
-        gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[0]);
-        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
-        gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
-
-        gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[1]);
-        gl_buffer_data(PIXEL_PACK_BUFFER, buffer_size, null(), STREAM_READ);
-        gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
+    } else if size != old_size {
+        //Resize PBO if dimensions changed
+        recalculated = true;
+        let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
+        unsafe {
+            gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
+            gl_buffer_data(PIXEL_PACK_BUFFER, size as isize, null(), STREAM_READ);
+        }
+        *pbo_data = (pbo, size);
     }
-}
-
-static INDEX: AtomicUsize = AtomicUsize::new(0);
-
-pub fn flip_image_bytes(input: *const u8, output: *mut u8, width: i32, height: i32, bpp: u32) {
-    let chunk = if bpp > 24 {
-        (width as usize) * 4
-    } else {
-        (width as usize) * 3 + (width as usize) % 4
-    };
 
     unsafe {
-        let mut source = input.add(chunk * (height as usize - 1));
-        let mut destination = output;
+        if !recalculated {
+            gl_bind_buffer(PIXEL_PACK_BUFFER, pbo);
+        }
+        glReadPixels(0, 0, width, height, BGRA, UNSIGNED_BYTE, null_mut());
 
-        while source != input {
-            std::ptr::copy_nonoverlapping(source, destination, chunk);
-            destination = destination.add(chunk);
-            source = source.sub(chunk);
+        let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
+        let pbo_ptr = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY) as *const u8;
+
+        if !pbo_ptr.is_null() {
+            let row_stride = (width * 4) as usize;
+
+            for row in 0..height as usize {
+                let src_row_start = pbo_ptr.add(row * row_stride);
+                let dest_row_start = dest.add((height as usize - 1 - row) * row_stride);
+                copy_nonoverlapping(src_row_start, dest_row_start, row_stride);
+            }
+
+            let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
+            gl_unmap_buffer(PIXEL_PACK_BUFFER);
         }
     }
-}
-
-pub unsafe fn read_pixel_buffers(
-    dest: *mut GLubyte,
-    pbo: &mut [GLuint; 2],
-    width: GLint,
-    height: GLint,
-) {
-    let index_cell = INDEX.load(Ordering::Relaxed);
-    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-    let gl_unmap_buffer = *GL_UNMAP_BUFFER.get().unwrap();
-    let gl_map_buffer = *GL_MAP_BUFFER.get().unwrap();
-
-    // Swap indices
-    let index = (index_cell + 1) % 2;
-    let next_index = (index + 1) % 2;
-    INDEX.store(index, Ordering::Relaxed);
-
-    glPixelStorei(UNPACK_ROW_LENGTH, width);
-    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[index]);
-    glReadPixels(0, 0, width, height, BGRA, UNSIGNED_BYTE, null_mut());
-    gl_bind_buffer(PIXEL_PACK_BUFFER, pbo[next_index]);
-
-    let data = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY);
-
-    if !data.is_null() {
-        flip_image_bytes(data as *const u8, dest.cast(), width, height, 32);
-        gl_unmap_buffer(PIXEL_PACK_BUFFER);
-    } else {
-        glReadPixels(0, 0, width, height, BGRA, UNSIGNED_BYTE, dest as *mut _);
-    }
-
-    gl_bind_buffer(PIXEL_PACK_BUFFER, 0);
-    glPixelStorei(UNPACK_ROW_LENGTH, 0);
 }
 
 /* fn print_gl_errors(name: &str) {

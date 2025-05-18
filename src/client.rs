@@ -1,6 +1,6 @@
 //Client sided code. Everything on this file is ran on client.
 
-use gl::{types::GLuint, CURRENT_PROGRAM, VERTEX_ARRAY_BINDING};
+use gl::{CURRENT_PROGRAM, VERTEX_ARRAY_BINDING};
 use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
@@ -38,10 +38,7 @@ use windows::{
 };
 
 use crate::{
-    graphics::{
-        draw_point, generate_pixel_buffers, load_opengl_extensions, read_pixel_buffers,
-        restore_state,
-    },
+    graphics::{draw_point, load_opengl_extensions, read_frame, restore_state},
     memory::MEMORY_MANAGER,
     windows::{WI_CONSOLE, WI_MODIFIERS},
 };
@@ -273,10 +270,6 @@ pub unsafe fn unhook_wndproc(hwnd: u64) {
 static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" fn(HDC) -> BOOL>> =
     OnceLock::new();
 
-lazy_static! {
-    static ref PBO: Mutex<[GLuint; 2]> = Mutex::new([0; 2]);
-}
-
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let mem_manager = MEMORY_MANAGER.lock().unwrap();
     let mut viewport = [0, 0, 0, 0];
@@ -291,17 +284,13 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
 
     let width = viewport[2];
     let height = viewport[3];
+    let frame_size = width * height * 4;
 
-    mem_manager.set_dimensions(width, height);
+    mem_manager.set_dimensions(width, height, frame_size);
 
     if load_opengl_extensions() {
         let dest = mem_manager.image_ptr();
-        if !dest.is_null() {
-            let mut pbo = PBO.lock().unwrap();
-            generate_pixel_buffers(&mut *pbo, width, height, 4);
-            read_pixel_buffers(dest as *mut u8, &mut *pbo, width, height);
-        }
-
+        read_frame(width, height, frame_size, dest);
         if (mouse.0 > -1) && (mouse.1 > -1) && (mouse.0 < width) && (mouse.1 < height) {
             draw_point(mouse.0, mouse.1, width, height);
         }
