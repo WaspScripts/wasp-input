@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     ffi::{c_void, CString},
     ptr::{null, null_mut},
     sync::{
@@ -8,30 +7,19 @@ use std::{
     },
 };
 
-use crate::Mutex;
 use gl::{
     types::{
         GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLubyte, GLuint, GLvoid,
     },
-    ARRAY_BUFFER, BGRA, BLEND, DYNAMIC_DRAW, FRAGMENT_SHADER, NICEST, ONE_MINUS_SRC_ALPHA,
-    PIXEL_PACK_BUFFER, POINTS, READ_ONLY, STREAM_READ, TEXTURE_2D, TEXTURE_RECTANGLE,
-    UNPACK_ROW_LENGTH, UNSIGNED_BYTE, VERTEX_SHADER,
+    BGRA, FRAGMENT_SHADER, PIXEL_PACK_BUFFER, POINTS, READ_ONLY, STREAM_READ, UNPACK_ROW_LENGTH,
+    UNSIGNED_BYTE, VERTEX_SHADER,
 };
-use lazy_static::lazy_static;
+
 use windows::{
     core::PCSTR,
-    Win32::Graphics::{
-        Gdi::HDC,
-        OpenGL::{
-            glBegin, glBlendFunc, glColor3f, glColor4ub, glDisable, glDrawArrays, glEnable, glEnd,
-            glFlush, glGetError, glGetFloatv, glHint, glIsEnabled, glLoadIdentity, glMatrixMode,
-            glOrtho, glPixelStorei, glPointSize, glPopAttrib, glPopMatrix, glPushAttrib,
-            glPushMatrix, glRasterPos2f, glReadPixels, glVertex2i, glVertex3f, glViewport,
-            wglCreateContext, wglGetProcAddress, wglMakeCurrent, GetPixelFormat,
-            GL_ALL_ATTRIB_BITS, GL_DEPTH_TEST, GL_FALSE, GL_FASTEST, GL_FLOAT, GL_MODELVIEW,
-            GL_NO_ERROR, GL_POINTS, GL_POINT_SIZE, GL_POINT_SMOOTH, GL_POINT_SMOOTH_HINT,
-            GL_PROJECTION, GL_SRC_ALPHA, HGLRC,
-        },
+    Win32::Graphics::OpenGL::{
+        glDrawArrays, glGetError, glPixelStorei, glPointSize, glReadPixels, wglGetProcAddress,
+        GL_NO_ERROR,
     },
 };
 
@@ -49,24 +37,19 @@ type GlShaderSourceFn = unsafe extern "system" fn(
     string: *const *const GLchar,
     length: *const GLint,
 );
-
 type GlCompileShaderFn = unsafe extern "system" fn(shader: GLuint);
 type GlCreateProgramFn = unsafe extern "system" fn() -> GLuint;
 type GlAttachShaderFn = unsafe extern "system" fn(program: GLuint, shader: GLuint);
 type GlLinkProgramFn = unsafe extern "system" fn(program: GLuint);
 type GlDeleteShaderFn = unsafe extern "system" fn(shader: GLuint);
-type GlGenVertexArraysFn = unsafe extern "system" fn(n: GLsizei, arrays: *mut GLuint);
 type GlBindVertexArrayFn = unsafe extern "system" fn(array: GLuint);
-type GlVertexAttribPointerFn = unsafe extern "system" fn(
-    index: GLuint,
-    size: GLint,
-    type_: GLenum,
-    normalized: GLboolean,
-    stride: GLsizei,
-    pointer: *const c_void,
-);
+
 type GlUseProgramFn = unsafe extern "system" fn(program: GLuint);
-type GlEnableVertexAttribArrayFn = unsafe extern "system" fn(index: GLuint);
+
+type GlCreateVertexArrays = unsafe extern "system" fn(n: GLsizei, arrays: *mut GLuint);
+
+type GLUniform2Fv =
+    unsafe extern "system" fn(location: GLint, count: GLsizei, value: *const GLfloat);
 
 static GL_GEN_BUFFERS: OnceLock<GlGenBuffersFn> = OnceLock::new();
 static GL_DELETE_BUFFERS: OnceLock<GlDeleteBuffersFn> = OnceLock::new();
@@ -81,11 +64,23 @@ static GL_CREATE_PROGRAM: OnceLock<GlCreateProgramFn> = OnceLock::new();
 static GL_ATTACH_SHADER: OnceLock<GlAttachShaderFn> = OnceLock::new();
 static GL_LINK_PROGRAM: OnceLock<GlLinkProgramFn> = OnceLock::new();
 static GL_DELETE_SHADER: OnceLock<GlDeleteShaderFn> = OnceLock::new();
-static GL_GEN_VERTEX_ARRAYS: OnceLock<GlGenVertexArraysFn> = OnceLock::new();
 static GL_BIND_VERTEX_ARRAY: OnceLock<GlBindVertexArrayFn> = OnceLock::new();
-static GL_VERTEX_ATTRIB_POINTER: OnceLock<GlVertexAttribPointerFn> = OnceLock::new();
 static GL_USE_PROGRAM: OnceLock<GlUseProgramFn> = OnceLock::new();
-static GL_ENABLE_VERTEX_ATTRIB_ARRAY: OnceLock<GlEnableVertexAttribArrayFn> = OnceLock::new();
+static GL_CREATE_VERTEX_ARRAYS: OnceLock<GlCreateVertexArrays> = OnceLock::new();
+static GL_UNIFORM_2FV: OnceLock<GLUniform2Fv> = OnceLock::new();
+
+static SHADER_PROGRAM: OnceLock<GLuint> = OnceLock::new();
+static VAO: OnceLock<GLuint> = OnceLock::new();
+
+pub fn restore_state(prev_program: i32, prev_vao: i32) {
+    let use_program = *GL_USE_PROGRAM.get().unwrap();
+    let bind_vertex_array = *GL_BIND_VERTEX_ARRAY.get().unwrap();
+
+    unsafe {
+        use_program(prev_program as GLuint);
+        bind_vertex_array(prev_vao as GLuint);
+    }
+}
 
 pub unsafe fn load_opengl_extensions() -> bool {
     let load_fn = |name: &str| -> *const c_void {
@@ -127,66 +122,17 @@ pub unsafe fn load_opengl_extensions() -> bool {
         && load!(GL_LINK_PROGRAM, GlLinkProgramFn, "glLinkProgram")
         && load!(GL_DELETE_SHADER, GlDeleteShaderFn, "glDeleteShader")
         && load!(
-            GL_GEN_VERTEX_ARRAYS,
-            GlGenVertexArraysFn,
-            "glGenVertexArrays"
-        )
-        && load!(
             GL_BIND_VERTEX_ARRAY,
             GlBindVertexArrayFn,
             "glBindVertexArray"
         )
-        && load!(
-            GL_VERTEX_ATTRIB_POINTER,
-            GlVertexAttribPointerFn,
-            "glVertexAttribPointer"
-        )
         && load!(GL_USE_PROGRAM, GlUseProgramFn, "glUseProgram")
         && load!(
-            GL_ENABLE_VERTEX_ATTRIB_ARRAY,
-            GlEnableVertexAttribArrayFn,
-            "glEnableVertexAttribArray"
+            GL_CREATE_VERTEX_ARRAYS,
+            GlCreateVertexArrays,
+            "glCreateVertexArrays"
         )
-}
-
-#[derive(Copy, Clone)]
-struct SafeHGLRC(HGLRC);
-
-unsafe impl Send for SafeHGLRC {}
-unsafe impl Sync for SafeHGLRC {}
-
-lazy_static! {
-    static ref CONTEXTS: Mutex<HashMap<i32, SafeHGLRC>> = Mutex::new(HashMap::new());
-}
-
-pub unsafe fn push_gl_context(hdc: HDC, width: i32, height: i32) {
-    let pixelformat = GetPixelFormat(hdc);
-
-    let mut contexts = CONTEXTS.lock().unwrap();
-    if !contexts.contains_key(&pixelformat) {
-        let ctx = wglCreateContext(hdc).expect("Failed to create OpenGL context");
-        contexts.insert(pixelformat, SafeHGLRC(ctx));
-    }
-
-    let SafeHGLRC(ctx) = *contexts.get(&pixelformat).unwrap();
-    let _ = wglMakeCurrent(hdc, ctx);
-
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-
-    glPushMatrix();
-    glViewport(0, 0, width, height);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0.0, width as f64, 0.0, height as f64, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    glDisable(GL_DEPTH_TEST);
-}
-
-pub unsafe fn pop_gl_context(hdc: HDC, ctx: HGLRC) {
-    glPopMatrix();
-    glPopAttrib();
-    let _ = wglMakeCurrent(hdc, ctx);
+        && load!(GL_UNIFORM_2FV, GLUniform2Fv, "glUniform2fv")
 }
 
 static WIDTH: AtomicI32 = AtomicI32::new(0);
@@ -285,175 +231,97 @@ pub unsafe fn read_pixel_buffers(
     glPixelStorei(UNPACK_ROW_LENGTH, 0);
 }
 
-pub unsafe fn gl_draw_point(x: f32, y: f32) {
-    glColor4ub(0xFF, 0x00, 0x00, 0xFF);
-    let mut point_size = 0.0;
-    let gl_blend = glIsEnabled(BLEND) != 0;
-    let gl_texture_2d = glIsEnabled(TEXTURE_2D) != 0;
-    let gl_rectangle = glIsEnabled(TEXTURE_RECTANGLE) != 0;
-    let point_smooth = glIsEnabled(GL_POINT_SMOOTH) != 0;
-    glGetFloatv(GL_POINT_SIZE, &mut point_size);
-
-    // Set new state
-    glEnable(BLEND);
-    glBlendFunc(GL_SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
-
-    glDisable(TEXTURE_2D);
-    glEnable(GL_POINT_SMOOTH);
-    glHint(GL_POINT_SMOOTH_HINT, NICEST);
-
-    glPushMatrix();
-    glLoadIdentity();
-
-    // Draw Point
-    glRasterPos2f(x, y);
-    glPointSize(4.0);
-    glBegin(POINTS);
-    glVertex3f(x, y, 0.0);
-    glEnd();
-    glFlush();
-
-    // Restore state
-    glPopMatrix();
-
-    if !gl_blend {
-        glDisable(BLEND);
+fn print_gl_errors(name: &str) {
+    loop {
+        let error = unsafe { glGetError() };
+        if error == GL_NO_ERROR {
+            break;
+        }
+        println!("{} error: {:x}\r\n", name, error);
     }
-
-    if gl_texture_2d {
-        glEnable(TEXTURE_2D);
-    }
-
-    if gl_rectangle {
-        glEnable(TEXTURE_RECTANGLE);
-    }
-
-    if !point_smooth {
-        glDisable(GL_POINT_SMOOTH);
-    }
-
-    glPointSize(point_size);
 }
 
-pub static SHADER_PROGRAM: OnceLock<u32> = OnceLock::new();
-
-pub static VAO: OnceLock<u32> = OnceLock::new();
-
-pub static VBO: OnceLock<u32> = OnceLock::new();
-
-pub unsafe fn init_gl() {
+fn compile_shader(source: &str, shader_type: GLenum) -> GLuint {
     let gl_create_shader = *GL_CREATE_SHADER.get().unwrap();
     let gl_shader_source = *GL_SHADER_SOURCE.get().unwrap();
-    let gl_comile_shader = *GL_COMPILE_SHADER.get().unwrap();
+    let gl_compile_shader = *GL_COMPILE_SHADER.get().unwrap();
+
+    let c_str = CString::new(source.as_bytes()).unwrap();
+
+    unsafe {
+        let shader = gl_create_shader(shader_type);
+        gl_shader_source(shader, 1, &c_str.as_ptr(), null());
+        gl_compile_shader(shader);
+        shader
+    }
+}
+
+fn init_gl_resources() {
     let gl_create_program = *GL_CREATE_PROGRAM.get().unwrap();
     let gl_attach_shader = *GL_ATTACH_SHADER.get().unwrap();
     let gl_link_program = *GL_LINK_PROGRAM.get().unwrap();
     let gl_delete_shader = *GL_DELETE_SHADER.get().unwrap();
-    let gl_gen_vertex_arrays = *GL_GEN_VERTEX_ARRAYS.get().unwrap();
-    let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
-    let gl_bind_vertex_array = *GL_BIND_VERTEX_ARRAY.get().unwrap();
-    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-    let gl_vertex_attrib_pointer = *GL_VERTEX_ATTRIB_POINTER.get().unwrap();
-    let gl_enable_vertex_attrib_array = *GL_ENABLE_VERTEX_ATTRIB_ARRAY.get().unwrap();
+    let gl_create_vertex_arrays = *GL_CREATE_VERTEX_ARRAYS.get().unwrap();
 
-    let vertex_shader_src = b"#version 460 core\nlayout(location = 0) in vec2 aPos;\nvoid main() {\n gl_Position = vec4(aPos, 0.0, 1.0);\n}\0";
-    let fragment_shader_src = b"#version 460 core\nout vec4 FragColor;\nvoid main() {\n FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n}\0";
+    const VS_SRC: &str = r#"
+    #version 460 core
+    layout(location = 0) uniform vec2 pointPos;
+    void main() {
+        gl_Position = vec4(pointPos, 0.0, 1.0);
+        gl_PointSize = 6.0;
+    }"#;
 
-    let vertex_shader = gl_create_shader(VERTEX_SHADER);
+    const FS_SRC: &str = r#"
+    #version 460 core
+    out vec4 FragColor;
+    void main() {
+        vec2 coord = gl_PointCoord * 2.0 - 1.0;
+        float dist = length(coord);
+        if (dist > 1.0) discard;
+        FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    }"#;
 
-    gl_shader_source(
-        vertex_shader,
-        1,
-        [vertex_shader_src.as_ptr().cast()].as_ptr(),
-        null(),
-    );
+    let vs = compile_shader(VS_SRC, VERTEX_SHADER);
+    let fs = compile_shader(FS_SRC, FRAGMENT_SHADER);
 
-    gl_comile_shader(vertex_shader);
+    unsafe {
+        let program = gl_create_program();
+        gl_attach_shader(program, vs);
+        gl_attach_shader(program, fs);
+        gl_link_program(program);
 
-    let fragment_shader = gl_create_shader(FRAGMENT_SHADER);
+        gl_delete_shader(vs);
+        gl_delete_shader(fs);
 
-    gl_shader_source(
-        fragment_shader,
-        1,
-        [fragment_shader_src.as_ptr().cast()].as_ptr(),
-        std::ptr::null(),
-    );
+        let mut vao = 0;
+        gl_create_vertex_arrays(1, &mut vao);
 
-    gl_comile_shader(fragment_shader);
-
-    let shader_program = gl_create_program();
-
-    gl_attach_shader(shader_program, vertex_shader);
-    gl_attach_shader(shader_program, fragment_shader);
-    gl_link_program(shader_program);
-    gl_delete_shader(vertex_shader);
-    gl_delete_shader(fragment_shader);
-
-    let mut vao = 0;
-    let mut vbo = 0;
-
-    gl_gen_vertex_arrays(1, &mut vao);
-    gl_gen_buffers(1, &mut vbo);
-    gl_bind_vertex_array(vao);
-    gl_bind_buffer(ARRAY_BUFFER, vbo);
-
-    gl_vertex_attrib_pointer(
-        0,
-        2,
-        GL_FLOAT,
-        GL_FALSE as u8,
-        2 * size_of::<f32>() as i32,
-        null(),
-    );
-
-    gl_enable_vertex_attrib_array(0);
-
-    SHADER_PROGRAM.set(shader_program).ok();
-    VAO.set(vao).ok();
-    VBO.set(vbo).ok();
+        SHADER_PROGRAM.set(program).unwrap();
+        VAO.set(vao).unwrap();
+    };
 }
 
-pub unsafe fn draw_pt(x: i32, y: i32, w: i32, h: i32) {
+pub fn draw_point(x: i32, y: i32, w: i32, h: i32) {
     if SHADER_PROGRAM.get().is_none() {
-        init_gl();
+        init_gl_resources();
     }
 
-    let gl_use_program = *GL_USE_PROGRAM.get().unwrap();
-    let gl_bind_vertex_array = *GL_BIND_VERTEX_ARRAY.get().unwrap();
-    let gl_bind_buffer = *GL_BIND_BUFFER.get().unwrap();
-    let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
+    let use_program = *GL_USE_PROGRAM.get().unwrap();
+    let bind_vertex_array = *GL_BIND_VERTEX_ARRAY.get().unwrap();
+    let uniform_2fv = *GL_UNIFORM_2FV.get().unwrap();
 
-    let shader_program = *SHADER_PROGRAM.get().unwrap();
+    let program = *SHADER_PROGRAM.get().unwrap();
     let vao = *VAO.get().unwrap();
-    let vbo = *VBO.get().unwrap();
 
-    let gl_blend = glIsEnabled(BLEND) != 0;
-
-    // Convert mouse pos to NDC
     let x_ndc = (x as f32 / w as f32) * 2.0 - 1.0;
     let y_ndc = 1.0 - (y as f32 / h as f32) * 2.0;
-    let vertex = [x_ndc, y_ndc];
+    let pos = [x_ndc, y_ndc];
 
-    // Draw the point
-
-    glEnable(BLEND);
-    glBlendFunc(GL_SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
-
-    gl_use_program(shader_program);
-    gl_bind_vertex_array(vao);
-    gl_bind_buffer(ARRAY_BUFFER, vbo);
-
-    gl_buffer_data(
-        ARRAY_BUFFER,
-        size_of_val(&vertex) as isize,
-        vertex.as_ptr().cast(),
-        DYNAMIC_DRAW,
-    );
-
-    glPointSize(4.0);
-    glDrawArrays(GL_POINTS, 0, 1);
-
-    if !gl_blend {
-        glDisable(BLEND);
-    }
+    unsafe {
+        use_program(program);
+        bind_vertex_array(vao);
+        glPointSize(6.0);
+        uniform_2fv(0, 1, pos.as_ptr());
+        glDrawArrays(POINTS, 0, 1);
+    };
 }

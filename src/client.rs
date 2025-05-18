@@ -1,6 +1,6 @@
 //Client sided code. Everything on this file is ran on client.
 
-use gl::types::GLuint;
+use gl::{types::GLuint, CURRENT_PROGRAM, VERTEX_ARRAY_BINDING};
 use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
@@ -39,7 +39,8 @@ use windows::{
 
 use crate::{
     graphics::{
-        draw_pt, generate_pixel_buffers, gl_draw_point, load_opengl_extensions, read_pixel_buffers,
+        draw_point, generate_pixel_buffers, load_opengl_extensions, read_pixel_buffers,
+        restore_state,
     },
     memory::get_img_ptr,
     target::{get_mouse_pos, MOUSE_POSITION},
@@ -282,6 +283,11 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let mouse = get_mouse_pos(hwnd.0 as u64);
 
     glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
+    // Save current state
+    let mut prev_program: i32 = 0;
+    let mut prev_vao: i32 = 0;
+    glGetIntegerv(CURRENT_PROGRAM, &mut prev_program);
+    glGetIntegerv(VERTEX_ARRAY_BINDING, &mut prev_vao);
 
     let width = viewport[2];
     let height = viewport[3];
@@ -295,10 +301,11 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
         }
 
         if (mouse.x > -1) && (mouse.y > -1) && (mouse.x < width) && (mouse.y < height) {
-            println!("Mouse: {:?}\r\n", mouse);
-            draw_pt(mouse.x, mouse.y, width, height);
+            draw_point(mouse.x, mouse.y, width, height);
         }
     }
+
+    restore_state(prev_program, prev_vao);
 
     let detour = ORIGINAL_WGL_SWAPBUFFERS.get().unwrap();
     detour.call(hdc)
