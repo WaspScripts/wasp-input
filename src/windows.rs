@@ -12,7 +12,7 @@ use windows::{
     core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, RECT, TRUE, WAIT_OBJECT_0,
+            CloseHandle, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, TRUE, WAIT_OBJECT_0,
             WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::ScreenToClient,
@@ -32,7 +32,7 @@ use windows::{
                 EnableWindow, IsWindowEnabled, MapVirtualKeyA, VkKeyScanA, MAPVK_VK_TO_VSC,
             },
             WindowsAndMessaging::{
-                EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos, GetWindowRect,
+                EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
                 GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
             },
@@ -42,7 +42,7 @@ use windows::{
 
 use crate::{
     client::{open_client_console, start_thread, unhook_wndproc},
-    memory::{create_shared_memory, is_mapped, open_shared_memory},
+    memory::{MemoryManager, MEMORY_MANAGER},
 };
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
@@ -70,19 +70,19 @@ pub extern "system" fn DllMain(
             let _ = DisableThreadLibraryCalls(hinst_dll.into());
 
             open_client_console();
-            if open_shared_memory() {
-                if is_mapped() {
-                    println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
+            let mem_manager = MEMORY_MANAGER.lock().unwrap();
 
-                    let _ = CreateThread(
-                        Some(null_mut()),
-                        0,
-                        Some(start_thread),
-                        Some(hwnd.0 as *mut c_void),
-                        THREAD_CREATION_FLAGS(0),
-                        Some(null_mut()),
-                    );
-                }
+            if mem_manager.is_mapped() {
+                println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
+
+                let _ = CreateThread(
+                    Some(null_mut()),
+                    0,
+                    Some(start_thread),
+                    Some(hwnd.0 as *mut c_void),
+                    THREAD_CREATION_FLAGS(0),
+                    Some(null_mut()),
+                );
             }
         },
         0 => {
@@ -102,7 +102,7 @@ pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
 }
 
 pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
-    create_shared_memory();
+    MemoryManager::create_map();
 
     let process_handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
         Ok(process) => {
@@ -248,20 +248,6 @@ pub fn get_jagrenderview(pid: u32) -> Option<HWND> {
     unsafe {
         let _ = EnumWindows(Some(enum_windows_proc), LPARAM(pid as isize));
         FOUND_HWND.with(|cell| *cell.borrow())
-    }
-}
-
-pub fn get_window_size(hwnd: u64) -> (i32, i32) {
-    unsafe {
-        let hwnd = hwnd as *mut c_void;
-        let mut rect = RECT::default();
-        if GetWindowRect(HWND(hwnd), &mut rect).is_ok() {
-            let width = rect.right - rect.left;
-            let height = rect.bottom - rect.top;
-            (width, height)
-        } else {
-            (-1, -1)
-        }
     }
 }
 

@@ -15,9 +15,9 @@ use std::char::from_u32;
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
-            Gdi::{WindowFromDC, HDC},
+            Gdi::HDC,
             OpenGL::{glGetIntegerv, GL_VIEWPORT},
         },
         System::{
@@ -42,8 +42,7 @@ use crate::{
         draw_point, generate_pixel_buffers, load_opengl_extensions, read_pixel_buffers,
         restore_state,
     },
-    memory::get_img_ptr,
-    target::{get_mouse_pos, MOUSE_POSITION},
+    memory::MEMORY_MANAGER,
     windows::{WI_CONSOLE, WI_MODIFIERS},
 };
 
@@ -220,8 +219,9 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
         WM_MOUSEMOVE => {
             let x = (lparam.0 & 0xFFFF) as u16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i32;
-            let mut lock = MOUSE_POSITION.lock().unwrap();
-            *lock = POINT { x: x, y: y };
+
+            let mem_manager = MEMORY_MANAGER.lock().unwrap();
+            mem_manager.set_mouse_position(x, y);
 
             WM_MOUSEMOVE
         }
@@ -278,9 +278,9 @@ lazy_static! {
 }
 
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
+    let mem_manager = MEMORY_MANAGER.lock().unwrap();
     let mut viewport = [0, 0, 0, 0];
-    let hwnd = WindowFromDC(hdc);
-    let mouse = get_mouse_pos(hwnd.0 as u64);
+    let mouse = mem_manager.get_mouse_position();
 
     glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
     // Save current state
@@ -292,16 +292,18 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let width = viewport[2];
     let height = viewport[3];
 
+    mem_manager.set_dimensions(width, height);
+
     if load_opengl_extensions() {
-        let dest = get_img_ptr();
+        let dest = mem_manager.image_ptr();
         if !dest.is_null() {
             let mut pbo = PBO.lock().unwrap();
             generate_pixel_buffers(&mut *pbo, width, height, 4);
             read_pixel_buffers(dest as *mut u8, &mut *pbo, width, height);
         }
 
-        if (mouse.x > -1) && (mouse.y > -1) && (mouse.x < width) && (mouse.y < height) {
-            draw_point(mouse.x, mouse.y, width, height);
+        if (mouse.0 > -1) && (mouse.1 > -1) && (mouse.0 < width) && (mouse.1 < height) {
+            draw_point(mouse.0, mouse.1, width, height);
         }
     }
 

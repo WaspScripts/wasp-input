@@ -18,8 +18,7 @@ use gl::{
 use windows::{
     core::PCSTR,
     Win32::Graphics::OpenGL::{
-        glDrawArrays, glGetError, glPixelStorei, glPointSize, glReadPixels, wglGetProcAddress,
-        GL_NO_ERROR,
+        glDrawArrays, glPixelStorei, glPointSize, glReadPixels, wglGetProcAddress,
     },
 };
 
@@ -231,7 +230,7 @@ pub unsafe fn read_pixel_buffers(
     glPixelStorei(UNPACK_ROW_LENGTH, 0);
 }
 
-fn print_gl_errors(name: &str) {
+/* fn print_gl_errors(name: &str) {
     loop {
         let error = unsafe { glGetError() };
         if error == GL_NO_ERROR {
@@ -240,6 +239,7 @@ fn print_gl_errors(name: &str) {
         println!("{} error: {:x}\r\n", name, error);
     }
 }
+ */
 
 fn compile_shader(source: &str, shader_type: GLenum) -> GLuint {
     let gl_create_shader = *GL_CREATE_SHADER.get().unwrap();
@@ -268,7 +268,6 @@ fn init_gl_resources() {
     layout(location = 0) uniform vec2 pointPos;
     void main() {
         gl_Position = vec4(pointPos, 0.0, 1.0);
-        gl_PointSize = 6.0;
     }"#;
 
     const FS_SRC: &str = r#"

@@ -11,10 +11,10 @@ use std::{
 use windows::Win32::Foundation::POINT;
 
 use crate::{
-    memory::{get_img_ptr, image_buffer},
+    memory::MEMORY_MANAGER,
     windows::{
-        get_jagrenderview, get_mouse_position, get_window_size, key_down, key_up, keys_send,
-        lbutton, mbutton, mouse_move, rbutton, scroll,
+        get_jagrenderview, get_mouse_position, key_down, key_up, keys_send, lbutton, mbutton,
+        mouse_move, rbutton, scroll,
     },
 };
 
@@ -32,14 +32,16 @@ lazy_static! {
 }
 
 pub fn get_mouse_pos(hwnd: u64) -> POINT {
-    let mut lock = MOUSE_POSITION.lock().unwrap();
-    if (lock.x == -1) | (lock.y == -1) {
+    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let (x, y) = unsafe { mem_manager.get_mouse_position() };
+
+    if (x == -1) | (y == -1) {
         match get_mouse_position(hwnd) {
-            Some(pt) => *lock = pt,
+            Some(pt) => unsafe { mem_manager.set_mouse_position(pt.x, pt.y) },
             None => println!("[WaspInput]: Failed to get mouse position!\r\n"),
         };
     }
-    *lock
+    POINT { x: x, y: y }
 }
 
 #[no_mangle]
@@ -136,8 +138,8 @@ pub extern "C" fn SimbaPluginTarget_GetDimensions(
         return;
     }
 
-    let target = TARGET.lock().unwrap();
-    let (w, h) = get_window_size(target.hwnd);
+    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let (w, h) = unsafe { mem_manager.get_dimensions() };
 
     unsafe {
         *width = w;
@@ -170,17 +172,12 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
         return false;
     }
 
-    let target = TARGET.lock().unwrap();
-    let (w, h) = get_window_size(target.hwnd);
+    let mem_manager = MEMORY_MANAGER.lock().unwrap();
 
-    let ptr = unsafe { get_img_ptr() };
-    if ptr.is_null() {
-        return false;
-    }
-
+    let (w, h) = unsafe { mem_manager.get_dimensions() };
     unsafe { *data_width = w };
 
-    let img_data = unsafe { image_buffer(w as usize, h as usize, ptr) };
+    let img_data = unsafe { mem_manager.image_buffer(w as usize, h as usize) };
     let offset = ((y * (w) + x) * 4) as isize;
     unsafe { *bgra = img_data.offset(offset) as *mut c_void };
 
