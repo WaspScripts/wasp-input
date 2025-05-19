@@ -2,13 +2,13 @@ name: Notify WaspLib2 of new release.
 
 on:
   release:
-    types: [published]
+    types: [created]
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger repository_dispatch in target repo
+      - name: Send notification
         env:
           TARGET_REPO: Torwent/WaspLib2
           TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}

@@ -1,5 +1,3 @@
-//Client sided code. Everything on this file is ran on client.
-
 use gl::{CURRENT_PROGRAM, VERTEX_ARRAY_BINDING};
 use lazy_static::lazy_static;
 use retour::GenericDetour;
@@ -303,8 +301,8 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
 
     restore_state(prev_program, prev_vao);
 
-    let detour = ORIGINAL_WGL_SWAPBUFFERS.get().unwrap();
-    detour.call(hdc)
+    let original = ORIGINAL_WGL_SWAPBUFFERS.get().unwrap();
+    original.call(hdc)
 }
 
 unsafe fn hook_wgl_swap_buffers() {

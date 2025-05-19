@@ -53,7 +53,7 @@ pub static mut MODULE: HMODULE = HMODULE(null_mut());
 #[no_mangle]
 pub extern "system" fn DllMain(
     hinst_dll: HINSTANCE,
-    fdw_reason: u32, // DWORD is u32 in windows crate
+    fdw_reason: u32,
     _lpv_reserved: *mut c_void,
 ) -> BOOL {
     unsafe { MODULE = HMODULE(hinst_dll.0) };
