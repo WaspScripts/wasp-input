@@ -29,9 +29,7 @@ jobs:
         override: true
 
     - name: Build for target
-      run: |
-      rustup target add ${{ matrix.target }}
-      cargo build --release --target ${{ matrix.target }}
+      run: cargo build --release --target=${{ matrix.target }}
 
     - name: Rename DLLs
       run: |
