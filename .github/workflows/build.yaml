@@ -1,8 +1,7 @@
-name: Build and Release
+name: Build
 
 on:
   pull_request:
-  workflow_dispatch:
   push:
     branches: [main]
 
