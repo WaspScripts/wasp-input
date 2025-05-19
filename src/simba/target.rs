@@ -28,7 +28,7 @@ lazy_static! {
     pub static ref TARGET: Mutex<SimbaTarget> = Mutex::new(SimbaTarget { pid: 0, hwnd: 0 });
     pub static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
     static ref KEYBOARD_STATE: Mutex<[bool; 255]> = Mutex::new([false; 255]);
-    static ref MOUSE_STATE: Mutex<[bool; 2]> = Mutex::new([false; 2]);
+    static ref MOUSE_STATE: Mutex<[bool; 3]> = Mutex::new([false; 3]);
 }
 
 pub fn get_mouse_pos(hwnd: u64) -> POINT {
