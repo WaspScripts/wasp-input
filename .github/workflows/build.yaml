@@ -9,8 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   PROJECT_NAME: waspinput
-  NAME_WIN32: wasplib32.dll
-  NAME_WIN64: wasplib64.dll
+  NAME_WIN32: waspinput32.dll
+  NAME_WIN64: waspinput64.dll
 
 jobs:
   build:
@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1

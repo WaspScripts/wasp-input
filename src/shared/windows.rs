@@ -40,7 +40,7 @@ use windows::{
     },
 };
 
-use crate::client::client::{start_thread, unhook_wgl_swap_buffers, unhook_wndproc};
+use crate::client::hooks::{start_thread, unhook_wgl_swap_buffers, unhook_wndproc};
 
 use super::memory::{MemoryManager, MEMORY_MANAGER};
 
