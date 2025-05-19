@@ -82,19 +82,6 @@ jobs:
           echo "CURRENT_DAY=$(date +'%d')" >> $GITHUB_ENV
           echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Update version.simba
-        run: |
-          sed -i "s/WL_VERSION_YEAR: Integer = .*/WL_VERSION_YEAR: Integer = $CURRENT_YEAR;/" version.simba
-          sed -i "s/WL_VERSION_MONTH: Integer = .*/WL_VERSION_MONTH: Integer = $CURRENT_MONTH;/" version.simba
-          sed -i "s/WL_VERSION_DAY: Integer = .*/WL_VERSION_DAY: Integer = $CURRENT_DAY;/" version.simba
-          sed -i "s/WL_VERSION_COMMIT_HASH: String = .*/WL_VERSION_COMMIT_HASH: String = '$COMMIT_HASH';/" version.simba
-
-      - name: Commit version bump
-        run: |
-          git add version.simba
-          git commit -m "Automatic version bump to $CURRENT_YEAR.$CURRENT_MONTH.$CURRENT_DAY-$COMMIT_HASH"
-          git push
-
       - name: Create and push tag
         run: |
           TAG_NAME="$CURRENT_YEAR.$CURRENT_MONTH.$CURRENT_DAY-$COMMIT_HASH"
