@@ -322,3 +322,15 @@ unsafe fn hook_wgl_swap_buffers() {
     ORIGINAL_WGL_SWAPBUFFERS.set(detour).unwrap();
     println!("[WaspInput]: wglSwapBuffers successfully hooked.\r\n");
 }
+
+pub unsafe fn unhook_wgl_swap_buffers() {
+    let detour = ORIGINAL_WGL_SWAPBUFFERS
+        .get()
+        .expect("[WaspInput]: wglSwapBuffers hook not found\r\n");
+
+    detour
+        .disable()
+        .expect("[WaspInput]: Failed to disable wglSwapBuffers hook\r\n");
+
+    println!("[WaspInput]: wglSwapBuffers successfully unhooked.\r\n");
+}
