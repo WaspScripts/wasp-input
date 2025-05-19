@@ -40,10 +40,9 @@ use windows::{
     },
 };
 
-use crate::{
-    client::{start_thread, unhook_wndproc},
-    memory::{MemoryManager, MEMORY_MANAGER},
-};
+use crate::client::client::{start_thread, unhook_wndproc};
+
+use super::memory::{MemoryManager, MEMORY_MANAGER};
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
 pub const WI_MODIFIERS: u32 = WM_USER + 2;

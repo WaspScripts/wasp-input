@@ -10,7 +10,7 @@ use std::{
 
 use windows::Win32::Foundation::POINT;
 
-use crate::{
+use crate::shared::{
     memory::MEMORY_MANAGER,
     windows::{
         get_jagrenderview, get_mouse_position, key_down, key_up, keys_send, lbutton, mbutton,
@@ -58,13 +58,9 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
         Err(_) => return null_mut(),
     };
 
-    let hwnd = match get_jagrenderview(pid) {
-        Some(hwnd) => hwnd.0 as u64,
-        None => {
-            println!("[WaspInput]: Couldn't find JagRenderView HWND\r\n");
-            return null_mut();
-        }
-    };
+    let hwnd = get_jagrenderview(pid)
+        .expect("[WaspInput]: Couldn't find JagRenderView HWND\r\n")
+        .0 as u64;
 
     let mut target = TARGET.lock().unwrap();
 

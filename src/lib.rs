@@ -2,10 +2,12 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
-mod memory;
-mod windows;
-use target::{SimbaTarget, TARGET};
-use windows::{get_jagrenderview, inject, is_input_enabled, open_console, toggle_input};
+use shared::windows::{get_jagrenderview, inject, is_input_enabled, open_console, toggle_input};
+use simba::target::{SimbaTarget, TARGET};
+
+mod client;
+mod shared;
+mod simba;
 
 // Pascal types as tuples (name, definition)
 const PASCAL_TYPES: &[(&str, &str)] = &[("PHelloChar", "^Char;"), ("PTestInt", "^Int32;")];
@@ -89,8 +91,3 @@ pub extern "C" fn SetInputState(state: bool) -> bool {
         None => false,
     }
 }
-
-mod client;
-mod graphics;
-mod plugin;
-mod target;

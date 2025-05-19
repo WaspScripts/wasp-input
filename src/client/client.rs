@@ -37,8 +37,8 @@ use windows::{
     },
 };
 
-use crate::{
-    graphics::{draw_point, load_opengl_extensions, read_frame, restore_state},
+use super::graphics::{draw_point, load_opengl_extensions, read_frame, restore_state};
+use crate::shared::{
     memory::MEMORY_MANAGER,
     windows::{WI_CONSOLE, WI_MODIFIERS},
 };
@@ -236,7 +236,11 @@ unsafe fn hook_wndproc(hwnd: u64) {
         return;
     }
 
-    let previous = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, hooked_wndproc as isize);
+    let previous = SetWindowLongPtrW(
+        hwnd,
+        GWLP_WNDPROC,
+        (hooked_wndproc as isize).try_into().unwrap(),
+    );
     if previous == 0 {
         panic!(
             "[WaspInput]: Failed to set new WndProc: {:?}\r\n",
@@ -254,7 +258,7 @@ pub unsafe fn unhook_wndproc(hwnd: u64) {
     let hwnd = HWND(hwnd as isize as *mut c_void);
 
     if let Some(original) = original {
-        let result = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, original as isize);
+        let result = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (original as isize).try_into().unwrap());
         if result == 0 {
             panic!("[WaspInput]: Failed to restore original WndProc.\r\n");
         }
