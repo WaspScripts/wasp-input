@@ -1,10 +1,10 @@
-name: Build
+name: Build and Release
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -60,3 +60,59 @@ jobs:
           name: ${{ matrix.target }}-dll
           path: |
             target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-msvc' && env.NAME_WIN32 || env.NAME_WIN64 }}
+
+  version:
+    needs: build
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "Wasp Bot"
+          git config --global user.email "waspbot@waspcripts.com"
+
+      - name: Get current date and commit hash
+        run: |
+          echo "CURRENT_YEAR=$(date +'%Y')" >> $GITHUB_ENV
+          echo "CURRENT_MONTH=$(date +'%m')" >> $GITHUB_ENV
+          echo "CURRENT_DAY=$(date +'%d')" >> $GITHUB_ENV
+          echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Update version.simba
+        run: |
+          sed -i "s/WL_VERSION_YEAR: Integer = .*/WL_VERSION_YEAR: Integer = $CURRENT_YEAR;/" version.simba
+          sed -i "s/WL_VERSION_MONTH: Integer = .*/WL_VERSION_MONTH: Integer = $CURRENT_MONTH;/" version.simba
+          sed -i "s/WL_VERSION_DAY: Integer = .*/WL_VERSION_DAY: Integer = $CURRENT_DAY;/" version.simba
+          sed -i "s/WL_VERSION_COMMIT_HASH: String = .*/WL_VERSION_COMMIT_HASH: String = '$COMMIT_HASH';/" version.simba
+
+      - name: Commit version bump
+        run: |
+          git add version.simba
+          git commit -m "Automatic version bump to $CURRENT_YEAR.$CURRENT_MONTH.$CURRENT_DAY-$COMMIT_HASH"
+          git push
+
+      - name: Create and push tag
+        run: |
+          TAG_NAME="$CURRENT_YEAR.$CURRENT_MONTH.$CURRENT_DAY-$COMMIT_HASH"
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          git tag $TAG_NAME
+          git push origin $TAG_NAME
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub release
+        run: |
+          gh release create $TAG_NAME \
+            artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
+            artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
+            --title "Release v$TAG_NAME" \
+            --notes "Automated release with 32-bit and 64-bit DLLs"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
