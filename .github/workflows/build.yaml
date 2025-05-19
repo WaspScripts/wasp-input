@@ -98,7 +98,7 @@ jobs:
           gh release create $TAG_NAME \
             artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
             artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
-            --title "Release v$TAG_NAME" \
-            --notes "Automated release with 32-bit and 64-bit DLLs"
+            --title "v$TAG_NAME" \
+            --notes "Automated plugin release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -86,7 +86,7 @@ pub extern "system" fn DllMain(
         0 => {
             println!("[WaspInput]: Detached.\r\n");
             unsafe {
-                unhook_wndproc(hwnd.0 as u64);
+                unhook_wndproc();
                 unhook_wgl_swap_buffers();
             };
         }

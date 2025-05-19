@@ -5,7 +5,6 @@ use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
     ffi::c_void,
-    mem::transmute,
     ptr::null_mut,
     sync::{Mutex, OnceLock},
 };
@@ -29,9 +28,9 @@ use windows::{
                 GetKeyboardState, MapVirtualKeyA, MapVirtualKeyW, ToUnicode, MAPVK_VK_TO_VSC,
             },
             WindowsAndMessaging::{
-                CallWindowProcW, IsWindowVisible, SetWindowLongPtrW, ShowWindow, GWLP_WNDPROC,
-                SW_HIDE, SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN,
-                WM_KEYUP, WM_KILLFOCUS, WM_MOUSEMOVE, WNDPROC,
+                GetWindowLongPtrW, IsWindowVisible, ShowWindow, GWLP_WNDPROC, SW_HIDE,
+                SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP,
+                WM_KILLFOCUS, WM_MOUSEMOVE,
             },
         },
     },
@@ -70,7 +69,9 @@ pub unsafe fn open_client_console() {
 }
 
 //WndProc hook
-static mut ORIGINAL_WNDPROC: Option<WNDPROC> = None;
+static ORIGINAL_WNDPROC: OnceLock<
+    GenericDetour<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>,
+> = OnceLock::new();
 
 fn get_modifier_lparam(key: i32, down: bool) -> LPARAM {
     let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
@@ -134,8 +135,13 @@ fn rebuild_key(key: u8, shift: bool, ctrl: bool, alt: bool) -> u16 {
     ((modifiers as u16) << 8) | (key as u16)
 }
 
-unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
+unsafe extern "system" fn hooked_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let original = ORIGINAL_WNDPROC.get().unwrap();
 
     match msg {
         WI_CONSOLE => {
@@ -150,19 +156,19 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             if nshift {
                 let msg = if *shift { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x10, !*shift);
-                let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x10), lparam);
+                let _ = original.call(hwnd, msg, WPARAM(0x10), lparam);
             }
 
             if nctrl {
                 let msg = if *ctrl { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x11, !*ctrl);
-                let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x11), lparam);
+                let _ = original.call(hwnd, msg, WPARAM(0x11), lparam);
             }
 
             if nalt {
                 let msg = if *alt { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x12, !*alt);
-                let _ = CallWindowProcW(original, hwnd, msg, WPARAM(0x12), lparam);
+                let _ = original.call(hwnd, msg, WPARAM(0x12), lparam);
             }
 
             if nshift {
@@ -205,7 +211,7 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                     new_wparam, lparam
                 );
 
-                return CallWindowProcW(original, hwnd, msg, new_wparam, lparam);
+                return original.call(hwnd, msg, new_wparam, lparam);
             }
 
             WM_CHAR
@@ -225,49 +231,44 @@ unsafe fn hooked_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
         _ => msg,
     };
 
-    CallWindowProcW(original, hwnd, msg, wparam, lparam)
+    original.call(hwnd, msg, wparam, lparam)
 }
 
 unsafe fn hook_wndproc(hwnd: u64) {
-    let hwnd = HWND(hwnd as *mut c_void);
+    let original_proc = GetWindowLongPtrW(HWND(hwnd as *mut c_void), GWLP_WNDPROC) as *const ();
 
-    if ORIGINAL_WNDPROC.is_some() {
-        println!("[WaspInput]: WndProc already hooked.\r\n");
-        return;
+    if original_proc.is_null() {
+        panic!("Failed to get WndProc: {:?}", GetLastError());
     }
 
-    let previous = SetWindowLongPtrW(
-        hwnd,
-        GWLP_WNDPROC,
-        (hooked_wndproc as isize).try_into().unwrap(),
-    );
-    if previous == 0 {
-        panic!(
-            "[WaspInput]: Failed to set new WndProc: {:?}\r\n",
-            GetLastError()
-        );
-    }
+    let detour =
+        GenericDetour::<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>::new(
+            std::mem::transmute(original_proc),
+            hooked_wndproc,
+        )
+        .expect("[WaspInput]: Failed to create WndProc hook.\r\n");
 
-    ORIGINAL_WNDPROC = Some(transmute(previous));
+    detour
+        .enable()
+        .expect("[WaspInput]: Failed to enable WndProc hook.\r\n");
 
-    println!("[WaspInput]: WndProc successfully hooked.\r\n");
+    ORIGINAL_WNDPROC
+        .set(detour)
+        .expect("[WaspInput]: Failed to save original WndProc function.\r\n");
+
+    println!("Retour trampoline WndProc hook set.");
 }
 
-pub unsafe fn unhook_wndproc(hwnd: u64) {
-    let original = ORIGINAL_WNDPROC.expect("[WaspInput]: ORIGINAL_WNDPROC is not set!\r\n");
-    let hwnd = HWND(hwnd as isize as *mut c_void);
+pub unsafe fn unhook_wndproc() {
+    let detour = ORIGINAL_WNDPROC
+        .get()
+        .expect("[WaspInput]: WndProc hook not found.\r\n");
 
-    if let Some(original) = original {
-        let result = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (original as isize).try_into().unwrap());
-        if result == 0 {
-            panic!("[WaspInput]: Failed to restore original WndProc.\r\n");
-        }
-        ORIGINAL_WNDPROC = None;
-        println!("[WaspInput]: WndProc successfully restored.\r\n");
-        return;
-    }
+    detour
+        .disable()
+        .expect("[WaspInput]: Failed to disable WndProc hook\r\n");
 
-    println!("[WaspInput]: No original WndProc stored.\r\n");
+    println!("[WaspInput]: WndProc successfully unhooked.\r\n");
 }
 
 //OpenGL Hook
@@ -307,19 +308,23 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
 }
 
 unsafe fn hook_wgl_swap_buffers() {
-    let module = GetModuleHandleA(PCSTR(b"opengl32.dll\0".as_ptr())).unwrap();
+    let module = GetModuleHandleA(PCSTR(b"opengl32.dll\0".as_ptr()))
+        .expect("[WaspInput]: opengl32.dll module not found.\r\n");
+
     let addr = GetProcAddress(module, PCSTR(b"wglSwapBuffers\0".as_ptr()))
-        .expect("[WaspInput]: wglSwapBuffers not found\r\n");
+        .expect("[WaspInput]: wglSwapBuffers function not found.\r\n");
 
     let original_fn: unsafe extern "system" fn(HDC) -> BOOL = std::mem::transmute(addr);
     let detour = GenericDetour::new(original_fn, hooked_wgl_swap_buffers)
-        .expect("[WaspInput]: Failed to create wglSwapBuffers hook\r\n");
+        .expect("[WaspInput]: Failed to create wglSwapBuffers hook.\r\n");
 
     detour
         .enable()
-        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook\r\n");
+        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook.\r\n");
 
-    ORIGINAL_WGL_SWAPBUFFERS.set(detour).unwrap();
+    ORIGINAL_WGL_SWAPBUFFERS
+        .set(detour)
+        .expect("[WaspInput]: Failed to save original wglSwapBuffers function.\r\n");
     println!("[WaspInput]: wglSwapBuffers successfully hooked.\r\n");
 }
 
