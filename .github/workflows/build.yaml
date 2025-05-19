@@ -80,24 +80,26 @@ jobs:
           echo "CURRENT_DAY=$(date +'%d')" >> $GITHUB_ENV
           echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Create and push tag
-        run: |
-          TAG_NAME="$CURRENT_YEAR.$CURRENT_MONTH.$CURRENT_DAY-$COMMIT_HASH"
+          TAG_NAME="$(date +'%Y').$(date +'%m').$(date +'%d')-$(git rev-parse --short HEAD)"
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
-          git tag $TAG_NAME
-          git push origin $TAG_NAME
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          git tag ${{ env.TAG_NAME }}
+          git push origin ${{ env.TAG_NAME }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create GitHub release
-        run: |
-          gh release create $TAG_NAME \
-            artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
-            artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
-            --title "$TAG_NAME" \
-            --notes "Automated plugin release"
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ env.TAG_NAME }} \
+            artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
+            artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
+            --title "${{ env.TAG_NAME }}" \
+            --notes "Automated plugin release"
