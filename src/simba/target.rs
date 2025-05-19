@@ -1,5 +1,4 @@
 //Target related methods for Simba 2.0
-
 use lazy_static::lazy_static;
 use std::{
     ffi::CStr,
@@ -69,6 +68,7 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
     }
 
     *target = SimbaTarget { pid, hwnd };
+
     return &mut *target as *mut SimbaTarget;
 }
 

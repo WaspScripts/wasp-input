@@ -36,8 +36,8 @@ use windows::{
 
 use super::graphics::{draw_point, load_opengl_extensions, read_frame, restore_state};
 use crate::shared::{
-    memory::MEMORY_MANAGER,
-    windows::{WI_CONSOLE, WI_MODIFIERS},
+    memory::{MemoryManager, MEMORY_MANAGER},
+    windows::{WI_CONSOLE, WI_MODIFIERS, WI_REMAP},
 };
 
 lazy_static! {
@@ -146,6 +146,15 @@ unsafe extern "system" fn hooked_wndproc(
             open_client_console();
             return LRESULT(0);
         }
+        WI_REMAP => {
+            println!("Restarting map.\r\n");
+            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
+            if mem_manager.is_mapped() {
+                mem_manager.close_map();
+            }
+            *mem_manager = MemoryManager::open_map();
+            return LRESULT(0);
+        }
         WI_MODIFIERS => {
             let mut modifiers = KEYBOARD_MODIFIERS.lock().unwrap();
             let (shift, ctrl, alt) = &mut *modifiers;
@@ -234,7 +243,6 @@ unsafe extern "system" fn hooked_wndproc(
 
 unsafe fn hook_wndproc(hwnd: u64) {
     let original_proc = GetWindowLongPtrW(HWND(hwnd as *mut c_void), GWLP_WNDPROC) as *const ();
-
     if original_proc.is_null() {
         panic!("Failed to get WndProc: {:?}", GetLastError());
     }
@@ -254,7 +262,7 @@ unsafe fn hook_wndproc(hwnd: u64) {
         .set(detour)
         .expect("[WaspInput]: Failed to save original WndProc function.\r\n");
 
-    println!("Retour trampoline WndProc hook set.");
+    println!("[WaspInput]: WndProc successfully hooked.\r\n");
 }
 
 pub unsafe fn unhook_wndproc() {

@@ -61,7 +61,7 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
     let mut target = TARGET.lock().unwrap();
     *target = SimbaTarget { pid, hwnd };
 
-    unsafe { inject(module_path, pid) }
+    unsafe { inject(module_path, pid, hwnd) }
 }
 
 #[no_mangle]

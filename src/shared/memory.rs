@@ -3,10 +3,10 @@ use std::sync::Mutex;
 use windows::{
     core::PCSTR,
     Win32::{
-        Foundation::HANDLE,
+        Foundation::{CloseHandle, HANDLE},
         System::Memory::{
-            CreateFileMappingA, MapViewOfFile, OpenFileMappingA, FILE_MAP_ALL_ACCESS,
-            PAGE_READWRITE,
+            CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile,
+            FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
         },
     },
 };
@@ -28,6 +28,7 @@ pub struct SharedMemory {
 
 pub struct MemoryManager {
     ptr: *mut SharedMemory,
+    hmap: HANDLE,
 }
 
 unsafe impl Send for MemoryManager {}
@@ -57,7 +58,7 @@ impl MemoryManager {
         (*ptr).width = -1;
         (*ptr).height = -1;
 
-        Self { ptr }
+        Self { ptr, hmap }
     }
 
     pub unsafe fn open_map() -> Self {
@@ -72,7 +73,23 @@ impl MemoryManager {
         assert!(!view.Value.is_null(), "[WaspInput]: Cannot map memory.\r\n");
 
         let ptr = view.Value as *mut SharedMemory;
-        Self { ptr }
+        Self { ptr, hmap }
+    }
+
+    pub unsafe fn close_map(&mut self) {
+        if !self.ptr.is_null() {
+            let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: self.ptr as _,
+            })
+            .expect("[WaspInput]: Failed to unmap memory map.\r\n");
+            self.ptr = std::ptr::null_mut();
+        }
+
+        if !self.hmap.is_invalid() {
+            let _ = CloseHandle(self.hmap)
+                .expect("[WaspInput]: Failed to close memory map handle.\r\n");
+            self.hmap = HANDLE::default();
+        }
     }
 
     pub unsafe fn is_mapped(&self) -> bool {
@@ -101,10 +118,6 @@ impl MemoryManager {
         (*self.ptr).height = height;
         (*self.ptr).img_size = frame_size;
     }
-
-    /* pub unsafe fn get_img_size(&self) -> i32 {
-        (*self.ptr).img_size
-    } */
 }
 
 lazy_static! {

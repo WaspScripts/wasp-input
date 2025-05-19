@@ -45,7 +45,8 @@ use crate::client::hooks::{start_thread, unhook_wgl_swap_buffers, unhook_wndproc
 use super::memory::{MemoryManager, MEMORY_MANAGER};
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
-pub const WI_MODIFIERS: u32 = WM_USER + 2;
+pub const WI_REMAP: u32 = WM_USER + 2;
+pub const WI_MODIFIERS: u32 = WM_USER + 3;
 
 #[no_mangle]
 pub static mut MODULE: HMODULE = HMODULE(null_mut());
@@ -85,9 +86,13 @@ pub extern "system" fn DllMain(
         },
         0 => {
             println!("[WaspInput]: Detached.\r\n");
+            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
             unsafe {
                 unhook_wndproc();
                 unhook_wgl_swap_buffers();
+                if mem_manager.is_mapped() {
+                    mem_manager.close_map();
+                }
             };
         }
         _ => (),
@@ -102,8 +107,10 @@ pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
     transmute(func_ptr)
 }
 
-pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
+pub unsafe fn inject(module_path: &str, pid: u32, hwnd: u64) -> bool {
     MemoryManager::create_map();
+
+    remap_memory(hwnd);
 
     let process_handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
         Ok(process) => {
@@ -264,6 +271,11 @@ pub fn toggle_input(hwnd: u64, state: bool) -> bool {
 pub fn open_console(hwnd: u64) {
     let hwnd = Some(HWND(hwnd as *mut c_void));
     let _ = unsafe { PostMessageW(hwnd, WI_CONSOLE, WPARAM(0), LPARAM(0)) };
+}
+
+pub fn remap_memory(hwnd: u64) {
+    let hwnd = Some(HWND(hwnd as *mut c_void));
+    let _ = unsafe { PostMessageW(hwnd, WI_REMAP, WPARAM(0), LPARAM(0)) };
 }
 
 //mouse
