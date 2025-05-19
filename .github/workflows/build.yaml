@@ -1,9 +1,10 @@
-name: Build and Release
+name: Build
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,67 +18,45 @@ jobs:
     strategy:
       matrix:
         target: [i686-pc-windows-msvc, x86_64-pc-windows-msvc]
+
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        target: ${{ matrix.target }}
-        override: true
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
 
-    - name: Build for target
-      run: cargo build --release --target=${{ matrix.target }}
+      - name: Build for ${{ matrix.target }}
+        run: cargo build --release --target=${{ matrix.target }}
 
-    - name: Rename DLLs
-      run: |
-        $target = "${{ matrix.target }}"
-        $originalPath = "target\$target\release\$env:PROJECT_NAME.dll"
+      - name: Rename output DLL
+        run: |
+          $target = "${{ matrix.target }}"
+          $original = "target\$target\release\$env:PROJECT_NAME.dll"
 
-        if ($target -eq "i686-pc-windows-msvc") {
-          $newPath = "target\$target\release\$env:NAME_WIN32"
-        } else {
-          $newPath = "target\$target\release\$env:NAME_WIN64"
-        }
+          if ($target -eq "i686-pc-windows-msvc") {
+            $renamed = "target\$target\release\$env:NAME_WIN32"
+          } else {
+            $renamed = "target\$target\release\$env:NAME_WIN64"
+          }
 
-        if (Test-Path $originalPath) {
-          Move-Item -Path $originalPath -Destination $newPath -Force
-          Write-Host "Renamed $originalPath to $newPath"
-        } else {
-          Write-Host "File not found: $originalPath"
-          exit 1
-        }
-      shell: pwsh
+          if (Test-Path $original) {
+            Move-Item $original $renamed -Force
+            Write-Host "Renamed $original to $renamed"
+          } else {
+            Write-Host "DLL not found: $original"
+            exit 1
+          }
+        shell: pwsh
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@4.6.2
-      with:
-        name: ${{ matrix.target }}-dll
-        path: target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-msvc' && env.NAME_WIN32 || env.NAME_WIN64 }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4.3.0
-      with:
-        path: artifacts
-
-    - name: Get current date for CalVer
-      id: date
-      run: echo "version=$(date +'%Y.%-m.%-d')" >> $GITHUB_OUTPUT
-
-    - name: Create tag and release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ steps.date.outputs.version }}
-        name: Release v${{ steps.date.outputs.version }}
-        body: "Automated release with 32-bit and 64-bit DLLs"
-        files: |
-          artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }}
-          artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-dll
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-msvc' && env.NAME_WIN32 || env.NAME_WIN64 }}
