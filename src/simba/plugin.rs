@@ -63,88 +63,50 @@ pub struct TSimbaInfomation {
     pub simba_version: i32,
     pub simba_major: i32,
     pub file_name: *const c_char,
-    pub compiler: *mut core::ffi::c_void,
+    pub compiler: *mut c_void,
 }
 
 #[repr(C, packed)]
 pub struct TSimbaMethods {
-    pub run_on_main_thread: Option<
-        unsafe extern "C" fn(
-            method: extern "C" fn(*mut core::ffi::c_void),
-            data: *mut core::ffi::c_void,
-        ),
-    >,
-    pub get_mem: Option<unsafe extern "C" fn(size: usize) -> *mut core::ffi::c_void>,
-    pub free_mem: Option<unsafe extern "C" fn(ptr: *mut core::ffi::c_void)>,
-    pub alloc_mem: Option<unsafe extern "C" fn(size: usize) -> *mut core::ffi::c_void>,
-    pub realloc_mem: Option<
-        unsafe extern "C" fn(
-            ptr: *mut *mut core::ffi::c_void,
-            size: usize,
-        ) -> *mut core::ffi::c_void,
-    >,
-    pub mem_size: Option<unsafe extern "C" fn(ptr: *mut core::ffi::c_void) -> usize>,
+    pub run_on_main_thread:
+        Option<unsafe extern "C" fn(method: extern "C" fn(*mut c_void), data: *mut c_void)>,
+    pub get_mem: Option<unsafe extern "C" fn(size: usize) -> *mut c_void>,
+    pub free_mem: Option<unsafe extern "C" fn(ptr: *mut c_void)>,
+    pub alloc_mem: Option<unsafe extern "C" fn(size: usize) -> *mut c_void>,
+    pub realloc_mem:
+        Option<unsafe extern "C" fn(ptr: *mut *mut c_void, size: usize) -> *mut c_void>,
+    pub mem_size: Option<unsafe extern "C" fn(ptr: *mut c_void) -> usize>,
 
     pub raise_exception: Option<unsafe extern "C" fn(message: *const c_char)>,
 
-    pub get_type_info: Option<
-        unsafe extern "C" fn(
-            compiler: *mut core::ffi::c_void,
-            typ: *const c_char,
-        ) -> *mut core::ffi::c_void,
-    >,
-    pub get_type_info_size: Option<unsafe extern "C" fn(typeinfo: *mut core::ffi::c_void) -> isize>,
-    pub get_type_info_field_offset: Option<
-        unsafe extern "C" fn(typeinfo: *mut core::ffi::c_void, field: *const c_char) -> isize,
-    >,
+    pub get_type_info:
+        Option<unsafe extern "C" fn(compiler: *mut c_void, typ: *const c_char) -> *mut c_void>,
+    pub get_type_info_size: Option<unsafe extern "C" fn(typeinfo: *mut c_void) -> isize>,
+    pub get_type_info_field_offset:
+        Option<unsafe extern "C" fn(typeinfo: *mut c_void, field: *const c_char) -> isize>,
 
     pub allocate_raw_array:
-        Option<unsafe extern "C" fn(element_size: usize, len: usize) -> *mut core::ffi::c_void>,
-    pub reallocate_raw_array: Option<
-        unsafe extern "C" fn(
-            array: *mut *mut core::ffi::c_void,
-            element_size: usize,
-            new_len: usize,
-        ),
-    >,
+        Option<unsafe extern "C" fn(element_size: usize, len: usize) -> *mut c_void>,
+    pub reallocate_raw_array:
+        Option<unsafe extern "C" fn(array: *mut *mut c_void, element_size: usize, new_len: usize)>,
 
-    pub allocate_array: Option<
-        unsafe extern "C" fn(
-            type_info: *mut core::ffi::c_void,
-            len: usize,
-        ) -> *mut core::ffi::c_void,
-    >,
-    pub allocate_string:
-        Option<unsafe extern "C" fn(data: *const c_char) -> *mut core::ffi::c_void>,
-    pub allocate_unicode_string:
-        Option<unsafe extern "C" fn(data: *const u16) -> *mut core::ffi::c_void>,
+    pub allocate_array:
+        Option<unsafe extern "C" fn(type_info: *mut c_void, len: usize) -> *mut c_void>,
+    pub allocate_string: Option<unsafe extern "C" fn(data: *const c_char) -> *mut c_void>,
+    pub allocate_unicode_string: Option<unsafe extern "C" fn(data: *const u16) -> *mut c_void>,
 
-    pub set_array_length: Option<
-        unsafe extern "C" fn(
-            type_info: *mut core::ffi::c_void,
-            var: *mut *mut core::ffi::c_void,
-            new_len: usize,
-        ),
-    >,
-    pub get_array_length: Option<unsafe extern "C" fn(var: *mut core::ffi::c_void) -> usize>,
+    pub set_array_length:
+        Option<unsafe extern "C" fn(type_info: *mut c_void, var: *mut *mut c_void, new_len: usize)>,
+    pub get_array_length: Option<unsafe extern "C" fn(var: *mut c_void) -> usize>,
 
-    pub external_image_create:
-        Option<unsafe extern "C" fn(auto_resize: bool) -> *mut core::ffi::c_void>,
-    pub external_image_set_memory: Option<
-        unsafe extern "C" fn(
-            img: *mut core::ffi::c_void,
-            data: *mut core::ffi::c_void,
-            width: i32,
-            height: i32,
-        ),
-    >,
+    pub external_image_create: Option<unsafe extern "C" fn(auto_resize: bool) -> *mut c_void>,
+    pub external_image_set_memory:
+        Option<unsafe extern "C" fn(img: *mut c_void, data: *mut c_void, width: i32, height: i32)>,
     pub external_image_resize:
-        Option<unsafe extern "C" fn(img: *mut core::ffi::c_void, new_width: i32, new_height: i32)>,
-    pub external_image_set_user_data: Option<
-        unsafe extern "C" fn(img: *mut core::ffi::c_void, user_data: *mut core::ffi::c_void),
-    >,
-    pub external_image_get_user_data:
-        Option<unsafe extern "C" fn(img: *mut core::ffi::c_void) -> *mut core::ffi::c_void>,
+        Option<unsafe extern "C" fn(img: *mut c_void, new_width: i32, new_height: i32)>,
+    pub external_image_set_user_data:
+        Option<unsafe extern "C" fn(img: *mut c_void, user_data: *mut c_void)>,
+    pub external_image_get_user_data: Option<unsafe extern "C" fn(img: *mut c_void) -> *mut c_void>,
 }
 
 #[no_mangle]

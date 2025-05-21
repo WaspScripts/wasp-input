@@ -22,8 +22,8 @@ pub struct SharedMemory {
     pub mouse_y: i32,
     pub width: i32,
     pub height: i32,
-    pub img_size: i32,
     pub img: [u8; IMAGE_DATA_SIZE],
+    pub overlay: [u8; IMAGE_DATA_SIZE],
 }
 
 pub struct MemoryManager {
@@ -100,6 +100,10 @@ impl MemoryManager {
         (*self.ptr).img.as_ptr() as *mut u8
     }
 
+    pub unsafe fn overlay_ptr(&self) -> *mut u8 {
+        (*self.ptr).overlay.as_ptr() as *mut u8
+    }
+
     pub unsafe fn get_mouse_position(&self) -> (i32, i32) {
         ((*self.ptr).mouse_x, (*self.ptr).mouse_y)
     }
@@ -113,10 +117,9 @@ impl MemoryManager {
         ((*self.ptr).width, (*self.ptr).height)
     }
 
-    pub unsafe fn set_dimensions(&self, width: i32, height: i32, frame_size: i32) {
+    pub unsafe fn set_dimensions(&self, width: i32, height: i32) {
         (*self.ptr).width = width;
         (*self.ptr).height = height;
-        (*self.ptr).img_size = frame_size;
     }
 }
 

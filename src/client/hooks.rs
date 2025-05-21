@@ -34,7 +34,9 @@ use windows::{
     },
 };
 
-use super::graphics::{draw_point, load_opengl_extensions, read_frame, restore_state};
+use super::graphics::{
+    draw_overlay, draw_point, load_opengl_extensions, read_frame, restore_state,
+};
 use crate::shared::{
     memory::{MemoryManager, MEMORY_MANAGER},
     windows::{WI_CONSOLE, WI_MODIFIERS, WI_REMAP},
@@ -297,11 +299,15 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let height = viewport[3];
     let frame_size = width * height * 4;
 
-    mem_manager.set_dimensions(width, height, frame_size);
+    mem_manager.set_dimensions(width, height);
 
     if load_opengl_extensions() {
         let dest = mem_manager.image_ptr();
         read_frame(width, height, frame_size, dest);
+
+        let overlay = mem_manager.overlay_ptr();
+        draw_overlay(width, height, overlay);
+
         if (mouse.0 > -1) && (mouse.1 > -1) && (mouse.0 < width) && (mouse.1 < height) {
             draw_point(mouse.0, mouse.1, width, height);
         }

@@ -17,6 +17,8 @@ use crate::shared::{
     },
 };
 
+use super::plugin::PLUGIN_SIMBA_METHODS;
+
 #[repr(C)]
 pub struct SimbaTarget {
     pub pid: u32,
@@ -75,7 +77,7 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
     args: *const c_char,
-    image: *mut *mut c_void,
+    overlay: *mut *mut c_void,
 ) -> *mut SimbaTarget {
     let target = SimbaPluginTarget_Request(args);
 
@@ -83,9 +85,10 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
         return null_mut();
     }
 
-    if !image.is_null() {
+    if !overlay.is_null() {
+        let mem_manager = MEMORY_MANAGER.lock().unwrap();
 
-        /* unsafe {
+        unsafe {
             let external_image_create = PLUGIN_SIMBA_METHODS
                 .external_image_create
                 .expect("external_image_create function pointer is null");
@@ -94,15 +97,12 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
                 .external_image_set_memory
                 .expect("external_image_set_memory function pointer is null");
 
+            let (w, h) = mem_manager.get_dimensions();
+
             let img = external_image_create(true);
-            *image = img;
-            external_image_set_memory(
-                img,
-                get_debug_image(width as usize, height as usize) as *mut c_void,
-                width,
-                height,
-            );
-        } */
+            *overlay = img;
+            external_image_set_memory(*overlay, mem_manager.overlay_ptr() as *mut c_void, w, h);
+        }
     }
 
     target
