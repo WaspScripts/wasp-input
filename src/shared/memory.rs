@@ -1,5 +1,9 @@
 use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::{
+    sync::Mutex,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 use windows::{
     core::PCSTR,
     Win32::{
@@ -120,6 +124,24 @@ impl MemoryManager {
     pub unsafe fn set_dimensions(&self, width: i32, height: i32) {
         (*self.ptr).width = width;
         (*self.ptr).height = height;
+    }
+
+    pub unsafe fn wait_dimensions(&self, time: u64) -> (i32, i32) {
+        let start = Instant::now();
+        let timeout = Duration::from_millis(time);
+
+        loop {
+            let (w, h) = self.get_dimensions();
+            if w > 0 && h > 0 {
+                return (w, h);
+            }
+
+            if start.elapsed() >= timeout {
+                panic!("[WaspInput]: Timeout waiting for valid dimensions!\r\n");
+            }
+
+            sleep(Duration::from_millis(100));
+        }
     }
 }
 

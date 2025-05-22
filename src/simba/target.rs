@@ -97,7 +97,7 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
                 .external_image_set_memory
                 .expect("external_image_set_memory function pointer is null");
 
-            let (w, h) = mem_manager.get_dimensions();
+            let (w, h) = mem_manager.wait_dimensions(5000);
 
             let img = external_image_create(true);
             *overlay = img;
