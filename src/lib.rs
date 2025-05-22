@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 use std::sync::Mutex;
 
 use shared::windows::{get_jagrenderview, inject, is_input_enabled, open_console, toggle_input};
-use simba::target::{SimbaTarget, TARGET};
+use simba::target::TARGET;
 
 mod client;
 mod shared;
@@ -59,7 +59,8 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
     };
 
     let mut target = TARGET.lock().unwrap();
-    *target = SimbaTarget { pid, hwnd };
+    target.pid = pid;
+    target.hwnd = hwnd;
 
     unsafe { inject(module_path, pid, hwnd) }
 }

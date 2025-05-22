@@ -39,7 +39,7 @@ use super::graphics::{
 };
 use crate::shared::{
     memory::{MemoryManager, MEMORY_MANAGER},
-    windows::{WI_CONSOLE, WI_MODIFIERS, WI_REMAP},
+    windows::{unload_self_dll, WI_CONSOLE, WI_DETACH, WI_MODIFIERS, WI_REMAP},
 };
 
 lazy_static! {
@@ -48,6 +48,7 @@ lazy_static! {
 }
 
 pub unsafe extern "system" fn start_thread(lparam: *mut c_void) -> u32 {
+    open_client_console();
     hook_wndproc(lparam as u64);
     hook_wgl_swap_buffers();
     0
@@ -190,6 +191,11 @@ unsafe extern "system" fn hooked_wndproc(
                 *alt = !*alt;
             }
 
+            return LRESULT(0);
+        }
+        WI_DETACH => {
+            println!("unloading\r\n");
+            //unload_self_dll();
             return LRESULT(0);
         }
         WM_KEYDOWN => {

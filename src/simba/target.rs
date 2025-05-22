@@ -23,13 +23,17 @@ use super::plugin::PLUGIN_SIMBA_METHODS;
 pub struct SimbaTarget {
     pub pid: u32,
     pub hwnd: u64,
+    pub keyboard: [bool; 255],
+    pub mouse: [bool; 3],
 }
 
 lazy_static! {
-    pub static ref TARGET: Mutex<SimbaTarget> = Mutex::new(SimbaTarget { pid: 0, hwnd: 0 });
-    pub static ref MOUSE_POSITION: Mutex<POINT> = Mutex::new(POINT { x: -1, y: -1 });
-    static ref KEYBOARD_STATE: Mutex<[bool; 255]> = Mutex::new([false; 255]);
-    static ref MOUSE_STATE: Mutex<[bool; 3]> = Mutex::new([false; 3]);
+    pub static ref TARGET: Mutex<SimbaTarget> = Mutex::new(SimbaTarget {
+        pid: 0,
+        hwnd: 0,
+        keyboard: [false; 255],
+        mouse: [false; 3],
+    });
 }
 
 pub fn get_mouse_pos(hwnd: u64) -> POINT {
@@ -69,7 +73,8 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
         return &mut *target as *mut SimbaTarget;
     }
 
-    *target = SimbaTarget { pid, hwnd };
+    target.pid = pid;
+    target.hwnd = hwnd;
 
     return &mut *target as *mut SimbaTarget;
 }
@@ -121,7 +126,12 @@ pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
     );
 
     let mut target = TARGET.lock().unwrap();
-    *target = SimbaTarget { pid: 0, hwnd: 0 };
+    *target = SimbaTarget {
+        pid: 0,
+        hwnd: 0,
+        keyboard: [false; 255],
+        mouse: [false; 3],
+    };
 }
 
 #[no_mangle]
@@ -190,11 +200,11 @@ pub extern "C" fn SimbaPluginTarget_MousePressed(
         return false;
     }
 
-    let state = MOUSE_STATE.lock().unwrap();
+    let target = TARGET.lock().unwrap();
     match mouse_button {
-        1 => state[0],
-        2 | 4 | 5 => state[1],
-        3 => state[2],
+        1 => target.keyboard[0],
+        2 | 4 | 5 => target.keyboard[1],
+        3 => target.keyboard[2],
         _ => {
             println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button);
             false
@@ -231,8 +241,6 @@ pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c
 
     let target = TARGET.lock().unwrap();
     mouse_move(target.hwnd, x, y);
-    let mut lock = MOUSE_POSITION.lock().unwrap();
-    *lock = POINT { x: x, y: y };
 }
 
 #[no_mangle]
@@ -242,22 +250,21 @@ pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_butt
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let mut target = TARGET.lock().unwrap();
 
     let pt = get_mouse_pos(target.hwnd);
-    let mut state = MOUSE_STATE.lock().unwrap();
     match mouse_button {
         1 => {
             lbutton(target.hwnd, false, pt.x, pt.y);
-            state[0] = false;
+            target.mouse[0] = false;
         }
         2 | 4 | 5 => {
             mbutton(target.hwnd, false, pt.x, pt.y);
-            state[1] = false;
+            target.mouse[1] = false;
         }
         3 => {
             rbutton(target.hwnd, false, pt.x, pt.y);
-            state[2] = false;
+            target.mouse[2] = false;
         }
         _ => {
             println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button);
@@ -273,22 +280,21 @@ pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_bu
         return;
     }
 
-    let target = TARGET.lock().unwrap();
-
+    let mut target = TARGET.lock().unwrap();
     let pt = get_mouse_pos(target.hwnd);
-    let mut state = MOUSE_STATE.lock().unwrap();
+
     match mouse_button {
         1 => {
             lbutton(target.hwnd, true, pt.x, pt.y);
-            state[0] = true;
+            target.mouse[0] = true;
         }
         2 | 4 | 5 => {
             mbutton(target.hwnd, true, pt.x, pt.y);
-            state[1] = true;
+            target.mouse[1] = true;
         }
         3 => {
             rbutton(target.hwnd, true, pt.x, pt.y);
-            state[2] = true;
+            target.mouse[2] = true;
         }
         _ => {
             println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button);
@@ -317,11 +323,9 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let mut target = TARGET.lock().unwrap();
     key_down(target.hwnd, key);
-
-    let mut state = KEYBOARD_STATE.lock().unwrap();
-    state[key as usize] = true;
+    target.keyboard[key as usize] = true;
 }
 
 #[no_mangle]
@@ -331,10 +335,9 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let mut target = TARGET.lock().unwrap();
     key_up(target.hwnd, key);
-    let mut state = KEYBOARD_STATE.lock().unwrap();
-    state[key as usize] = false;
+    target.keyboard[key as usize] = false;
 }
 
 #[no_mangle]
@@ -365,6 +368,6 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
 
 #[no_mangle]
 pub extern "C" fn SimbaPluginTarget_KeyPressed(_target: *mut SimbaTarget, key: c_int) -> bool {
-    let state = KEYBOARD_STATE.lock().unwrap();
-    state[key as usize]
+    let target = TARGET.lock().unwrap();
+    target.keyboard[key as usize]
 }
