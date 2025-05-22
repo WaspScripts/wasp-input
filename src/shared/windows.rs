@@ -45,10 +45,7 @@ use windows::{
     },
 };
 
-use crate::{
-    client::hooks::{start_thread, unhook_wgl_swap_buffers, unhook_wndproc},
-    simba::target::TARGET,
-};
+use crate::{client::hooks::start_thread, simba::target::TARGET};
 
 use super::memory::{MemoryManager, MEMORY_MANAGER};
 
@@ -89,14 +86,6 @@ fn client_main(hinst_dll: HINSTANCE, pid: u32, hwnd: HWND, reason: u32) -> BOOL 
         },
         0 => {
             println!("[WaspInput]: Detached.\r\n");
-            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
-            unsafe {
-                unhook_wndproc();
-                unhook_wgl_swap_buffers();
-                if mem_manager.is_mapped() {
-                    mem_manager.close_map();
-                }
-            };
             TRUE
         }
         _ => FALSE,
@@ -168,7 +157,6 @@ pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
 
 pub unsafe fn inject(module_path: &str, pid: u32, hwnd: u64) -> bool {
     MemoryManager::create_map();
-
     remap_memory(hwnd);
 
     let process_handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {

@@ -12,7 +12,7 @@ use std::char::from_u32;
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{CloseHandle, GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
             Gdi::HDC,
             OpenGL::{glGetIntegerv, GL_VIEWPORT},
@@ -194,7 +194,14 @@ unsafe extern "system" fn hooked_wndproc(
             return LRESULT(0);
         }
         WI_DETACH => {
-            println!("unloading\r\n");
+            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
+            unsafe {
+                unhook_wgl_swap_buffers();
+                if mem_manager.is_mapped() {
+                    mem_manager.close_map();
+                }
+                unhook_wndproc();
+            };
             //unload_self_dll();
             return LRESULT(0);
         }
