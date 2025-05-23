@@ -1,6 +1,7 @@
 //Target related methods for Simba 2.0
 use lazy_static::lazy_static;
 use std::{
+    collections::HashMap,
     ffi::CStr,
     os::raw::{c_char, c_int, c_void},
     ptr::null_mut,
@@ -10,7 +11,8 @@ use std::{
 use windows::Win32::Foundation::POINT;
 
 use crate::shared::{
-    memory::MEMORY_MANAGER,
+    memory::{MemoryManager, MEMORY_MANAGER},
+    sync::call_event,
     windows::{
         get_jagrenderview, get_mouse_position, key_down, key_up, keys_send, lbutton, mbutton,
         mouse_move, rbutton, scroll,
@@ -28,16 +30,15 @@ pub struct SimbaTarget {
 }
 
 lazy_static! {
-    pub static ref TARGET: Mutex<SimbaTarget> = Mutex::new(SimbaTarget {
-        pid: 0,
-        hwnd: 0,
-        keyboard: [false; 255],
-        mouse: [false; 3],
-    });
+    pub static ref TARGETS: Mutex<HashMap<u32, SimbaTarget>> = Mutex::new(HashMap::new());
 }
 
 pub fn get_mouse_pos(hwnd: u64) -> POINT {
-    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
     let (x, y) = unsafe { mem_manager.get_mouse_position() };
 
     if (x == -1) | (y == -1) {
@@ -63,20 +64,25 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
         Err(_) => return null_mut(),
     };
 
-    let hwnd = get_jagrenderview(pid)
-        .expect("[WaspInput]: Couldn't find JagRenderView HWND\r\n")
-        .0 as u64;
+    let hwnd = get_jagrenderview(pid).expect("[WaspInput]: Failed to find JagRenderView HWND.\r\n");
+    call_event(hwnd.0 as u64);
 
-    let mut target = TARGET.lock().unwrap();
+    let _ = MEMORY_MANAGER.set(Mutex::new(unsafe { MemoryManager::open_map(5000) }));
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
 
-    if (target.pid == pid) && (target.hwnd != 0) {
-        return &mut *target as *mut SimbaTarget;
+    if !unsafe { mem_manager.is_mapped() } {}
+
+    let mut targets = TARGETS.lock().unwrap();
+
+    if let Some(target) = targets.get_mut(&pid) {
+        return target as *mut SimbaTarget;
+    } else {
+        panic!("[WaspInput]: The specified target hasn't been injected.\r\n");
     }
-
-    target.pid = pid;
-    target.hwnd = hwnd;
-
-    return &mut *target as *mut SimbaTarget;
 }
 
 #[no_mangle]
@@ -91,7 +97,11 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
     }
 
     if !overlay.is_null() {
-        let mem_manager = MEMORY_MANAGER.lock().unwrap();
+        let mem_manager = MEMORY_MANAGER
+            .get()
+            .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+            .lock()
+            .unwrap();
 
         unsafe {
             let external_image_create = PLUGIN_SIMBA_METHODS
@@ -102,7 +112,7 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
                 .external_image_set_memory
                 .expect("external_image_set_memory function pointer is null");
 
-            let (w, h) = mem_manager.wait_dimensions(5000);
+            let (w, h) = mem_manager.get_dimensions();
 
             let img = external_image_create(true);
             *overlay = img;
@@ -119,19 +129,15 @@ pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
         return;
     }
 
-    let target = TARGET.lock().unwrap();
-    println!(
-        "Releasing Client PID: {} and HWND: {}\r\n",
-        target.pid, target.hwnd
-    );
+    let mut targets = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
 
-    let mut target = TARGET.lock().unwrap();
-    *target = SimbaTarget {
-        pid: 0,
-        hwnd: 0,
-        keyboard: [false; 255],
-        mouse: [false; 3],
-    };
+    if let Some(removed) = targets.remove(&target.pid) {
+        println!(
+            "Releasing Client PID: {} and HWND: {}\r\n",
+            removed.pid, removed.hwnd
+        );
+    }
 }
 
 #[no_mangle]
@@ -144,7 +150,11 @@ pub extern "C" fn SimbaPluginTarget_GetDimensions(
         return;
     }
 
-    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
     let (w, h) = unsafe { mem_manager.get_dimensions() };
 
     unsafe {
@@ -178,7 +188,11 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
         return false;
     }
 
-    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
 
     let (w, _h) = unsafe { mem_manager.get_dimensions() };
     unsafe { *data_width = w };
@@ -200,7 +214,8 @@ pub extern "C" fn SimbaPluginTarget_MousePressed(
         return false;
     }
 
-    let target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
     match mouse_button {
         1 => target.keyboard[0],
         2 | 4 | 5 => target.keyboard[1],
@@ -223,7 +238,9 @@ pub extern "C" fn SimbaPluginTarget_MousePosition(
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
+
     let pt = get_mouse_pos(target.hwnd);
 
     unsafe {
@@ -239,7 +256,9 @@ pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
+
     mouse_move(target.hwnd, x, y);
 }
 
@@ -250,7 +269,8 @@ pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_butt
         return;
     }
 
-    let mut target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &mut *target };
 
     let pt = get_mouse_pos(target.hwnd);
     match mouse_button {
@@ -280,7 +300,9 @@ pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_bu
         return;
     }
 
-    let mut target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &mut *target };
+
     let pt = get_mouse_pos(target.hwnd);
 
     match mouse_button {
@@ -310,7 +332,9 @@ pub extern "C" fn SimbaPluginTarget_MouseScroll(target: *mut SimbaTarget, scroll
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &mut *target };
+
     let pt = get_mouse_pos(target.hwnd);
     scroll(target.hwnd, true, scrolls, pt.x, pt.y);
     println!("[WaspInput]: TODO: Implement SimbaPluginTarget_MouseScroll\r\n");
@@ -323,7 +347,9 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
         return;
     }
 
-    let mut target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &mut *target };
+
     key_down(target.hwnd, key);
     target.keyboard[key as usize] = true;
 }
@@ -335,7 +361,9 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
         return;
     }
 
-    let mut target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &mut *target };
+
     key_up(target.hwnd, key);
     target.keyboard[key as usize] = false;
 }
@@ -362,12 +390,15 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
         return;
     }
 
-    let target = TARGET.lock().unwrap();
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
     keys_send(target.hwnd, text, len, sleeptimes);
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_KeyPressed(_target: *mut SimbaTarget, key: c_int) -> bool {
-    let target = TARGET.lock().unwrap();
+pub extern "C" fn SimbaPluginTarget_KeyPressed(target: *mut SimbaTarget, key: c_int) -> bool {
+    let _lock = TARGETS.lock().unwrap();
+    let target = unsafe { &*target };
+
     target.keyboard[key as usize]
 }

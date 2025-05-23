@@ -12,7 +12,7 @@ use std::char::from_u32;
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
-        Foundation::{CloseHandle, GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
             Gdi::HDC,
             OpenGL::{glGetIntegerv, GL_VIEWPORT},
@@ -39,19 +39,13 @@ use super::graphics::{
 };
 use crate::shared::{
     memory::{MemoryManager, MEMORY_MANAGER},
-    windows::{unload_self_dll, WI_CONSOLE, WI_DETACH, WI_MODIFIERS, WI_REMAP},
+    sync::event_listener,
+    windows::{WI_CONSOLE, WI_DETACH, WI_MODIFIERS},
 };
 
 lazy_static! {
     static ref KEYBOARD_MODIFIERS: Mutex<(bool, bool, bool)> = Mutex::new((false, false, false));
     static ref LAST_CHAR: Mutex<i32> = Mutex::new(0);
-}
-
-pub unsafe extern "system" fn start_thread(lparam: *mut c_void) -> u32 {
-    open_client_console();
-    hook_wndproc(lparam as u64);
-    hook_wgl_swap_buffers();
-    0
 }
 
 pub unsafe fn open_client_console() {
@@ -149,15 +143,6 @@ unsafe extern "system" fn hooked_wndproc(
             open_client_console();
             return LRESULT(0);
         }
-        WI_REMAP => {
-            println!("Restarting map.\r\n");
-            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
-            if mem_manager.is_mapped() {
-                mem_manager.close_map();
-            }
-            *mem_manager = MemoryManager::open_map();
-            return LRESULT(0);
-        }
         WI_MODIFIERS => {
             let mut modifiers = KEYBOARD_MODIFIERS.lock().unwrap();
             let (shift, ctrl, alt) = &mut *modifiers;
@@ -194,15 +179,9 @@ unsafe extern "system" fn hooked_wndproc(
             return LRESULT(0);
         }
         WI_DETACH => {
-            let mut mem_manager = MEMORY_MANAGER.lock().unwrap();
-            unsafe {
-                unhook_wgl_swap_buffers();
-                if mem_manager.is_mapped() {
-                    mem_manager.close_map();
-                }
-                unhook_wndproc();
-            };
-            //unload_self_dll();
+            unhook_wgl_swap_buffers();
+            unhook_wndproc();
+
             return LRESULT(0);
         }
         WM_KEYDOWN => {
@@ -245,7 +224,11 @@ unsafe extern "system" fn hooked_wndproc(
             let x = (lparam.0 & 0xFFFF) as u16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i32;
 
-            let mem_manager = MEMORY_MANAGER.lock().unwrap();
+            let mem_manager = MEMORY_MANAGER
+                .get()
+                .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+                .lock()
+                .unwrap();
             mem_manager.set_mouse_position(x, y);
 
             WM_MOUSEMOVE
@@ -273,9 +256,11 @@ unsafe fn hook_wndproc(hwnd: u64) {
         .enable()
         .expect("[WaspInput]: Failed to enable WndProc hook.\r\n");
 
-    ORIGINAL_WNDPROC
-        .set(detour)
-        .expect("[WaspInput]: Failed to save original WndProc function.\r\n");
+    if ORIGINAL_WNDPROC.get().is_none() {
+        ORIGINAL_WNDPROC
+            .set(detour)
+            .expect("[WaspInput]: Failed to save original WndProc function.\r\n");
+    }
 
     println!("[WaspInput]: WndProc successfully hooked.\r\n");
 }
@@ -297,7 +282,11 @@ static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" f
     OnceLock::new();
 
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
-    let mem_manager = MEMORY_MANAGER.lock().unwrap();
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
     let mut viewport = [0, 0, 0, 0];
     let mouse = mem_manager.get_mouse_position();
 
@@ -350,10 +339,19 @@ unsafe fn hook_wgl_swap_buffers() {
     ORIGINAL_WGL_SWAPBUFFERS
         .set(detour)
         .expect("[WaspInput]: Failed to save original wglSwapBuffers function.\r\n");
+
     println!("[WaspInput]: wglSwapBuffers successfully hooked.\r\n");
 }
 
 pub unsafe fn unhook_wgl_swap_buffers() {
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
+
+    mem_manager.clear_overlay();
+
     let detour = ORIGINAL_WGL_SWAPBUFFERS
         .get()
         .expect("[WaspInput]: wglSwapBuffers hook not found\r\n");
@@ -363,4 +361,32 @@ pub unsafe fn unhook_wgl_swap_buffers() {
         .expect("[WaspInput]: Failed to disable wglSwapBuffers hook\r\n");
 
     println!("[WaspInput]: wglSwapBuffers successfully unhooked.\r\n");
+}
+
+//enable...
+pub unsafe fn reenable_hooks() {
+    let wgl_swapbuffers_detour = ORIGINAL_WGL_SWAPBUFFERS
+        .get()
+        .expect("[WaspInput]: wglSwapBuffers hook not found\r\n");
+
+    wgl_swapbuffers_detour
+        .enable()
+        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook.\r\n");
+
+    let wndproc_detour = ORIGINAL_WNDPROC
+        .get()
+        .expect("[WaspInput]: WndProc hook not found\r\n");
+
+    wndproc_detour
+        .enable()
+        .expect("[WaspInput]: Failed to enable WndProc hook.\r\n");
+}
+pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
+    let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map()));
+
+    hook_wndproc(lparam as u64);
+    hook_wgl_swap_buffers();
+
+    event_listener(lparam as u64);
+    0
 }

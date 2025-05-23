@@ -1,6 +1,6 @@
-use lazy_static::lazy_static;
 use std::{
-    sync::Mutex,
+    ptr::{copy_nonoverlapping, null_mut, write_bytes},
+    sync::{Mutex, OnceLock},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -15,13 +15,14 @@ use windows::{
     },
 };
 
+const VERSION: &str = "f23a38f";
 const SHARED_MEM_NAME: &[u8] = b"WASPINPUT_DATA\0";
 const IMAGE_DATA_SIZE: usize = 33177602;
-const BUFFER_SIZE: usize = std::mem::size_of::<SharedMemory>();
 
 #[repr(C, packed)]
 pub struct SharedMemory {
     pub flag: u8,
+    pub version: [u8; 7],
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub width: i32,
@@ -29,6 +30,8 @@ pub struct SharedMemory {
     pub img: [u8; IMAGE_DATA_SIZE],
     pub overlay: [u8; IMAGE_DATA_SIZE],
 }
+
+const BUFFER_SIZE: usize = std::mem::size_of::<SharedMemory>();
 
 pub struct MemoryManager {
     ptr: *mut SharedMemory,
@@ -61,22 +64,46 @@ impl MemoryManager {
         (*ptr).mouse_y = -1;
         (*ptr).width = -1;
         (*ptr).height = -1;
+        copy_nonoverlapping(VERSION.as_ptr(), (*ptr).version.as_mut_ptr(), 7);
 
         Self { ptr, hmap }
     }
 
-    pub unsafe fn open_map() -> Self {
-        let hmap = OpenFileMappingA(
-            FILE_MAP_ALL_ACCESS.0,
-            false,
-            PCSTR(SHARED_MEM_NAME.as_ptr()),
-        )
-        .expect("[WaspInput]: Cannot open shared memory.\r\n");
+    pub unsafe fn open_map(time: u64) -> Self {
+        let start = Instant::now();
+        let timeout = Duration::from_millis(time);
+
+        let hmap = loop {
+            let handle = OpenFileMappingA(
+                FILE_MAP_ALL_ACCESS.0,
+                false,
+                PCSTR(SHARED_MEM_NAME.as_ptr()),
+            );
+
+            if let Ok(h) = handle {
+                if h.0 != null_mut() {
+                    break h;
+                }
+            }
+
+            if start.elapsed() >= timeout {
+                panic!("[WaspInput]: Cannot open shared memory.\r\n");
+            }
+
+            sleep(Duration::from_millis(100));
+        };
 
         let view = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, BUFFER_SIZE);
         assert!(!view.Value.is_null(), "[WaspInput]: Cannot map memory.\r\n");
 
         let ptr = view.Value as *mut SharedMemory;
+
+        let version = &(*ptr).version;
+        assert!(
+            version == VERSION.as_bytes(),
+            "[WaspInput]: Simba and Client are using different versions of WaspInput, please restart the client.\r\n"
+        );
+
         Self { ptr, hmap }
     }
 
@@ -86,7 +113,7 @@ impl MemoryManager {
                 Value: self.ptr as _,
             })
             .expect("[WaspInput]: Failed to unmap memory map.\r\n");
-            self.ptr = std::ptr::null_mut();
+            self.ptr = null_mut();
         }
 
         if !self.hmap.is_invalid() {
@@ -108,6 +135,13 @@ impl MemoryManager {
         (*self.ptr).overlay.as_ptr() as *mut u8
     }
 
+    pub unsafe fn clear_overlay(&self) {
+        if !self.ptr.is_null() {
+            let overlay_ptr = &mut (*self.ptr).overlay as *mut [u8; IMAGE_DATA_SIZE] as *mut u8;
+            write_bytes(overlay_ptr, 0, IMAGE_DATA_SIZE);
+        }
+    }
+
     pub unsafe fn get_mouse_position(&self) -> (i32, i32) {
         ((*self.ptr).mouse_x, (*self.ptr).mouse_y)
     }
@@ -125,27 +159,6 @@ impl MemoryManager {
         (*self.ptr).width = width;
         (*self.ptr).height = height;
     }
-
-    pub unsafe fn wait_dimensions(&self, time: u64) -> (i32, i32) {
-        let start = Instant::now();
-        let timeout = Duration::from_millis(time);
-
-        loop {
-            let (w, h) = self.get_dimensions();
-            if w > 0 && h > 0 {
-                return (w, h);
-            }
-
-            if start.elapsed() >= timeout {
-                panic!("[WaspInput]: Timeout waiting for valid dimensions!\r\n");
-            }
-
-            sleep(Duration::from_millis(100));
-        }
-    }
 }
 
-lazy_static! {
-    pub static ref MEMORY_MANAGER: Mutex<MemoryManager> =
-        Mutex::new(unsafe { MemoryManager::open_map() });
-}
+pub static MEMORY_MANAGER: OnceLock<Mutex<MemoryManager>> = OnceLock::new();

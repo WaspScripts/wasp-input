@@ -1,36 +1,26 @@
 use std::{
     cell::RefCell,
-    ffi::{c_char, c_int, c_void, OsStr},
+    ffi::{c_char, c_int, c_void},
     mem::transmute,
-    os::windows::ffi::OsStrExt,
-    ptr::null_mut,
     slice::from_raw_parts,
-    sync::OnceLock,
     thread::sleep,
     time::Duration,
 };
 
 use windows::{
-    core::{s, BOOL, PCSTR, PCWSTR},
+    core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{
-            CloseHandle, FreeLibrary, FALSE, HINSTANCE, HMODULE, HWND, LPARAM, POINT, TRUE,
-            WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+            CloseHandle, FALSE, HWND, LPARAM, POINT, TRUE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::ScreenToClient,
         System::{
             Diagnostics::Debug::WriteProcessMemory,
-            LibraryLoader::{
-                DisableThreadLibraryCalls, GetModuleFileNameW, GetModuleHandleA, GetModuleHandleW,
-                GetProcAddress,
-            },
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{
                 VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
             },
-            Threading::{
-                CreateRemoteThread, CreateThread, GetCurrentProcessId, OpenProcess,
-                WaitForSingleObject, PROCESS_ALL_ACCESS, THREAD_CREATION_FLAGS,
-            },
+            Threading::{CreateRemoteThread, OpenProcess, WaitForSingleObject, PROCESS_ALL_ACCESS},
         },
         UI::{
             Input::KeyboardAndMouse::{
@@ -45,109 +35,11 @@ use windows::{
     },
 };
 
-use crate::{client::hooks::start_thread, simba::target::TARGET};
-
-use super::memory::{MemoryManager, MEMORY_MANAGER};
+use super::main::MODULE;
 
 pub const WI_CONSOLE: u32 = WM_USER + 1;
-pub const WI_REMAP: u32 = WM_USER + 2;
 pub const WI_MODIFIERS: u32 = WM_USER + 3;
 pub const WI_DETACH: u32 = WM_USER + 4;
-
-#[no_mangle]
-pub static mut MODULE: HMODULE = HMODULE(null_mut());
-
-fn client_main(hinst_dll: HINSTANCE, pid: u32, hwnd: HWND, reason: u32) -> BOOL {
-    match reason {
-        1 => unsafe {
-            let _ = DisableThreadLibraryCalls(hinst_dll.into());
-            let mut buffer = [0u16; 260]; // MAX_PATH
-            let len = GetModuleFileNameW(Some(HMODULE::from(hinst_dll)), &mut buffer);
-
-            if len > 0 {
-                let path = String::from_utf16_lossy(&buffer[..len as usize]);
-                let _ = DLL_NAME.set(path);
-            }
-
-            let mem_manager = MEMORY_MANAGER.lock().unwrap();
-            if mem_manager.is_mapped() {
-                println!("[WaspInput]: Console attached. PID: {:?}\r\n", pid);
-                let _ = CreateThread(
-                    Some(null_mut()),
-                    0,
-                    Some(start_thread),
-                    Some(hwnd.0 as *mut c_void),
-                    THREAD_CREATION_FLAGS(0),
-                    Some(null_mut()),
-                );
-                return TRUE;
-            }
-            FALSE
-        },
-        0 => {
-            println!("[WaspInput]: Detached.\r\n");
-            TRUE
-        }
-        _ => FALSE,
-    }
-}
-
-pub static DLL_NAME: OnceLock<String> = OnceLock::new();
-
-fn simba_main(hinst_dll: HINSTANCE, reason: u32) -> BOOL {
-    match reason {
-        1 => {
-            let _ = unsafe { DisableThreadLibraryCalls(hinst_dll.into()) };
-            TRUE
-        }
-        0 => {
-            let target = TARGET.lock().unwrap();
-            let hwnd = HWND(target.hwnd as *mut c_void);
-            let _ = unsafe { PostMessageW(Some(hwnd), WI_DETACH, WPARAM(0), LPARAM(0)) };
-            TRUE
-        }
-        _ => FALSE,
-    }
-}
-
-#[no_mangle]
-pub extern "system" fn DllMain(
-    hinst_dll: HINSTANCE,
-    fdw_reason: u32,
-    _lpv_reserved: *mut c_void,
-) -> BOOL {
-    unsafe { MODULE = HMODULE(hinst_dll.0) };
-
-    let pid = unsafe { GetCurrentProcessId() };
-    match get_jagrenderview(pid) {
-        Some(hwnd) => client_main(hinst_dll, pid, hwnd, fdw_reason),
-        None => simba_main(hinst_dll, fdw_reason),
-    }
-}
-
-fn get_hmodule_from_path(path: &str) -> Option<HMODULE> {
-    let wide: Vec<u16> = OsStr::new(path)
-        .encode_wide()
-        .chain(std::iter::once(0)) // null-terminate
-        .collect();
-
-    unsafe { GetModuleHandleW(PCWSTR::from_raw(wide.as_ptr())).ok() }
-}
-
-pub fn unload_self_dll() -> bool {
-    if let Some(path) = DLL_NAME.get() {
-        if let Some(hmodule) = get_hmodule_from_path(path) {
-            let _ = unsafe { FreeLibrary(hmodule) };
-            true
-        } else {
-            eprintln!("Could not get HMODULE for path: {path}");
-            false
-        }
-    } else {
-        eprintln!("DLL path not initialized.");
-        false
-    }
-}
 
 pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
     let name_str = PCSTR::from_raw(name as *const u8);
@@ -155,10 +47,7 @@ pub unsafe fn get_proc_address(name: *const c_char) -> *mut c_void {
     transmute(func_ptr)
 }
 
-pub unsafe fn inject(module_path: &str, pid: u32, hwnd: u64) -> bool {
-    MemoryManager::create_map();
-    remap_memory(hwnd);
-
+pub unsafe fn inject(module_path: &str, pid: u32) -> bool {
     let process_handle = match OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
         Ok(process) => {
             if WaitForSingleObject(process, 0) != WAIT_TIMEOUT {
@@ -318,11 +207,6 @@ pub fn toggle_input(hwnd: u64, state: bool) -> bool {
 pub fn open_console(hwnd: u64) {
     let hwnd = Some(HWND(hwnd as *mut c_void));
     let _ = unsafe { PostMessageW(hwnd, WI_CONSOLE, WPARAM(0), LPARAM(0)) };
-}
-
-pub fn remap_memory(hwnd: u64) {
-    let hwnd = Some(HWND(hwnd as *mut c_void));
-    let _ = unsafe { PostMessageW(hwnd, WI_REMAP, WPARAM(0), LPARAM(0)) };
 }
 
 //mouse

@@ -12,6 +12,25 @@ env:
   NAME_WIN64: waspinput64.dll
 
 jobs:
+  update_version:
+    steps:
+      - name: Get commit hash
+        id: commit-hash
+        run: echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+      - name: Replace version hash
+        run: |
+          HASH=$(git rev-parse --short HEAD)
+          sed -i "s/^const VERSION: &str = \".*\";/const VERSION: &str = \"${HASH}\";/" src/shared/memory.rs
+      - name: Commit updated version
+        run: |
+          git config --global user.name "Wasp Bot"
+          git config --global user.email "waspbot@waspcripts.com"
+          git add src/shared/memory.rs
+          git commit -m "Bump version"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     runs-on: windows-latest
     strategy:
