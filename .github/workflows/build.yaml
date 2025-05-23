@@ -13,6 +13,7 @@ env:
 
 jobs:
   update_version:
+    runs-on: ubuntu-latest
     steps:
       - name: Get commit hash
         id: commit-hash
@@ -32,6 +33,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
+    needs: update_version
     runs-on: windows-latest
     strategy:
       matrix:
