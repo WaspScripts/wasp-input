@@ -22,7 +22,7 @@ jobs:
         run: echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
       - name: Replace version hash
         run: |
-          sed -i "s/\(const VERSION: &str = \"\)[a-f0-9]\{7\}\"/\1$COMMIT_HASH\"/" src/shared/memory.rs"
+          sed -i "s/const VERSION: &str = \"[a-f0-9]\{7\}\"/const VERSION: \&str = \"$COMMIT_HASH\"/" src/shared/memory.rs
       - name: Commit updated version
         run: |
           git config --global user.name "Wasp Bot"
