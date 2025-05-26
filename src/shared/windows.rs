@@ -29,7 +29,8 @@ use windows::{
             WindowsAndMessaging::{
                 EnumChildWindows, EnumWindows, GetClassNameW, GetCursorPos,
                 GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_USER,
             },
         },
     },
@@ -250,7 +251,7 @@ pub fn mbutton(hwnd: u64, down: bool, x: i32, y: i32) {
     unsafe {
         let _ = PostMessageW(
             Some(hwnd),
-            if down { WM_RBUTTONDOWN } else { WM_RBUTTONUP },
+            if down { WM_MBUTTONDOWN } else { WM_MBUTTONUP },
             WPARAM(0),
             LPARAM(lparam as isize),
         );
