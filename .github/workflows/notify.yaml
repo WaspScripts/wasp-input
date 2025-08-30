@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Send notification
         env:
-          TARGET_REPO: Torwent/WaspLib2
+          TARGET_REPO: WaspScripts/wasp-plugins
           TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
