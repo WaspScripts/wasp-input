@@ -11,9 +11,9 @@ cargo build
 To build for specific targets:
 ```
 //32 bits windows
-cargo build --target=i686-pc-windows-msvc
+cargo build --target=i686-pc-windows-gnu
 //64 bits windows
-cargo build --target=x86_64-pc-windows-msvc
+cargo build --target=x86_64-pc-windows-gnu
 ```
 
 You can find auto-built binaries on the [releases](https://github.com/Torwent/wasp-input/releases) page.
