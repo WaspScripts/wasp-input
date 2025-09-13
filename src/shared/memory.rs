@@ -15,7 +15,7 @@ use windows::{
     },
 };
 
-const VERSION: &str = "7aa0497";
+const VERSION: &str = "d0656bd";
 const SHARED_MEM_NAME: &[u8] = b"WASPINPUT_DATA\0";
 const IMAGE_DATA_SIZE: usize = 33177602;
 
