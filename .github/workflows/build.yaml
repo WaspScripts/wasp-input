@@ -56,10 +56,22 @@ jobs:
           rustc --version --verbose
           rustup show
 
-      - name: Install MinGW
+      - name: Install MSYS2 and MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-x86_64-gcc
+
+      - name: Add MinGW to PATH
         run: |
-          choco install mingw --no-progress --yes
-          echo "C:\tools\mingw64\bin" >> $GITHUB_PATH
+          if ("${{ matrix.target }}" -eq "i686-pc-windows-gnu") {
+            echo "C:\msys64\mingw32\bin" >> $env:GITHUB_PATH
+          } else {
+            echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+          }
+        shell: pwsh
 
       - name: Build for ${{ matrix.target }}
         run: cargo build --release --target=${{ matrix.target }}
