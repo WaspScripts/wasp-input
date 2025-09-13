@@ -50,6 +50,8 @@ jobs:
           profile: minimal
           toolchain: nightly
           target: ${{ matrix.target }}
+          components: rust-src
+          default: true
           override: true
 
       - name: Build for ${{ matrix.target }}
@@ -60,7 +62,7 @@ jobs:
           $target = "${{ matrix.target }}"
           $original = "target\$target\release\$env:PROJECT_NAME.dll"
 
-          if ($target -eq "i686-pc-windows-msvc") {
+          if ($target -eq "i686-pc-windows-gnu") {
             $renamed = "target\$target\release\$env:NAME_WIN32"
           } else {
             $renamed = "target\$target\release\$env:NAME_WIN64"
@@ -80,10 +82,11 @@ jobs:
         with:
           name: ${{ matrix.target }}-dll
           path: |
-            target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-msvc' && env.NAME_WIN32 || env.NAME_WIN64 }}
+            target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-gnu' && env.NAME_WIN32 || env.NAME_WIN64 }}
 
   version:
     needs: build
+    if: ${{ success() }}
     runs-on: ubuntu-latest
 
     steps:
@@ -121,7 +124,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create ${{ env.TAG_NAME }} \
-            artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
-            artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
+            artifacts/i686-pc-windows-gnu-dll/${{ env.NAME_WIN32 }} \
+            artifacts/x86_64-pc-windows-gnu-dll/${{ env.NAME_WIN64 }} \
             --title "${{ env.TAG_NAME }}" \
             --notes "Automated plugin release"
