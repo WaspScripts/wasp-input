@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 libc = "0.2"
-retour = "0.3.1"
+retour = "=0.4.0-alpha.4"
 gl = "0.14"
 windows = { version = "0.62", features = [
     "Win32_Security",

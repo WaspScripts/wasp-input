@@ -13,6 +13,7 @@ env:
 
 jobs:
   update_version:
+    if: ${{ github.repository_owner == 'WaspScripts' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -46,7 +47,7 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.87.0
+          toolchain: stable
           target: ${{ matrix.target }}
           default: true
           override: true
@@ -68,14 +69,6 @@ jobs:
         run: |
           echo "C:\msys64\mingw32\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        shell: pwsh
-
-      - name: Verify toolchain
-        run: |
-          ls "C:\msys64\mingw32\bin\i686-w64-mingw32-gcc.exe"
-          ls "C:\msys64\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
-          where i686-w64-mingw32-gcc || echo "Not found in PATH"
-          where x86_64-w64-mingw32-gcc || echo "Not found in PATH"
         shell: pwsh
 
       - name: Build for ${{ matrix.target }}
