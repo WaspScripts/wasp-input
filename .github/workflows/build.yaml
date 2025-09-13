@@ -73,11 +73,11 @@ jobs:
           }
         shell: pwsh
 
-        - name: Verify toolchain
-          run: |
-            where i686-w64-mingw32-gcc
-            where x86_64-w64-mingw32-gcc
-          shell: pwsh
+      - name: Verify toolchain
+        run: |
+          where i686-w64-mingw32-gcc
+          where x86_64-w64-mingw32-gcc
+        shell: pwsh
 
       - name: Build for ${{ matrix.target }}
         run: cargo build --release --target=${{ matrix.target }}
