@@ -34,7 +34,7 @@ lazy_static::lazy_static! {
 
 // dll functions
 #[no_mangle]
-pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
+pub extern "system" fn Inject(path: *const c_char, pid: u32) -> bool {
     if path.is_null() {
         println!("[WaspInput]: Invalid string\n");
         return false;
@@ -72,7 +72,7 @@ pub extern "C" fn Inject(path: *const c_char, pid: u32) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn OpenConsole() {
+pub extern "system" fn OpenConsole() {
     let hwnd = WINDOW_HWND.lock().unwrap();
 
     match *hwnd {
@@ -82,7 +82,7 @@ pub extern "C" fn OpenConsole() {
 }
 
 #[no_mangle]
-pub extern "C" fn GetInputState() -> bool {
+pub extern "system" fn GetInputState() -> bool {
     let hwnd = WINDOW_HWND.lock().unwrap();
     match *hwnd {
         Some(h) => is_input_enabled(h),
@@ -91,7 +91,7 @@ pub extern "C" fn GetInputState() -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn SetInputState(state: bool) -> bool {
+pub extern "system" fn SetInputState(state: bool) -> bool {
     let hwnd = WINDOW_HWND.lock().unwrap();
     match *hwnd {
         Some(h) => toggle_input(h, state),

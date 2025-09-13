@@ -51,7 +51,7 @@ pub fn get_mouse_pos(hwnd: u64) -> POINT {
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTarget {
+pub extern "system" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTarget {
     if args.is_null() {
         return null_mut();
     }
@@ -86,7 +86,7 @@ pub extern "C" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut SimbaTa
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
+pub extern "system" fn SimbaPluginTarget_RequestWithDebugImage(
     args: *const c_char,
     overlay: *mut *mut c_void,
 ) -> *mut SimbaTarget {
@@ -124,7 +124,7 @@ pub extern "C" fn SimbaPluginTarget_RequestWithDebugImage(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
+pub extern "system" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
     if target.is_null() {
         return;
     }
@@ -141,7 +141,7 @@ pub extern "C" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_GetDimensions(
+pub extern "system" fn SimbaPluginTarget_GetDimensions(
     target: *mut SimbaTarget,
     width: *mut c_int,
     height: *mut c_int,
@@ -164,7 +164,7 @@ pub extern "C" fn SimbaPluginTarget_GetDimensions(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_GetImageData(
+pub extern "system" fn SimbaPluginTarget_GetImageData(
     target: *mut SimbaTarget,
     x: c_int,
     y: c_int,
@@ -205,7 +205,7 @@ pub extern "C" fn SimbaPluginTarget_GetImageData(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MousePressed(
+pub extern "system" fn SimbaPluginTarget_MousePressed(
     target: *mut SimbaTarget,
     mouse_button: c_int,
 ) -> bool {
@@ -228,7 +228,7 @@ pub extern "C" fn SimbaPluginTarget_MousePressed(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MousePosition(
+pub extern "system" fn SimbaPluginTarget_MousePosition(
     target: *mut SimbaTarget,
     x: *mut i32,
     y: *mut i32,
@@ -250,7 +250,11 @@ pub extern "C" fn SimbaPluginTarget_MousePosition(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c_int, y: c_int) {
+pub extern "system" fn SimbaPluginTarget_MouseTeleport(
+    target: *mut SimbaTarget,
+    x: c_int,
+    y: c_int,
+) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -263,7 +267,7 @@ pub extern "C" fn SimbaPluginTarget_MouseTeleport(target: *mut SimbaTarget, x: c
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_button: c_int) {
+pub extern "system" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_button: c_int) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -294,7 +298,7 @@ pub extern "C" fn SimbaPluginTarget_MouseUp(target: *mut SimbaTarget, mouse_butt
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_button: c_int) {
+pub extern "system" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_button: c_int) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -326,7 +330,7 @@ pub extern "C" fn SimbaPluginTarget_MouseDown(target: *mut SimbaTarget, mouse_bu
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_MouseScroll(target: *mut SimbaTarget, scrolls: c_int) {
+pub extern "system" fn SimbaPluginTarget_MouseScroll(target: *mut SimbaTarget, scrolls: c_int) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -341,7 +345,7 @@ pub extern "C" fn SimbaPluginTarget_MouseScroll(target: *mut SimbaTarget, scroll
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int) {
+pub extern "system" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -355,7 +359,7 @@ pub extern "C" fn SimbaPluginTarget_KeyDown(target: *mut SimbaTarget, key: c_int
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) {
+pub extern "system" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) {
     if target.is_null() {
         println!("[WaspInput]: target is null!\r\n");
         return;
@@ -369,7 +373,7 @@ pub extern "C" fn SimbaPluginTarget_KeyUp(target: *mut SimbaTarget, key: c_int) 
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_KeySend(
+pub extern "system" fn SimbaPluginTarget_KeySend(
     target: *mut SimbaTarget,
     text: *mut c_char,
     len: c_int,
@@ -396,7 +400,7 @@ pub extern "C" fn SimbaPluginTarget_KeySend(
 }
 
 #[no_mangle]
-pub extern "C" fn SimbaPluginTarget_KeyPressed(target: *mut SimbaTarget, key: c_int) -> bool {
+pub extern "system" fn SimbaPluginTarget_KeyPressed(target: *mut SimbaTarget, key: c_int) -> bool {
     let _lock = TARGETS.lock().unwrap();
     let target = unsafe { &*target };
 

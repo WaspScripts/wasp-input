@@ -55,16 +55,15 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           update: true
-          install: mingw-w64-i686-gcc mingw-w64-x86_64-gcc
-
-      - name: Debug PATH
-        run: |
-          Get-ChildItem -Path "C:\msys64" -Recurse -Directory | Select-String "mingw"
+          install: ${{ matrix.target == 'i686-pc-windows-gnu' && 'mingw-w64-i686-gcc' || 'mingw-w64-x86_64-gcc' }}
 
       - name: Add MinGW to PATH
         run: |
-          echo "C:\\msys64\\mingw32\\bin" >> $env:GITHUB_PATH
-          echo "C:\\msys64\\mingw64\\bin" >> $env:GITHUB_PATH
+          if ("${{ matrix.target }}" -eq "i686-pc-windows-gnu") {
+            echo "C:\\msys64\\mingw32\\bin" >> $env:GITHUB_PATH
+          } else {
+            echo "C:\\msys64\\mingw64\\bin" >> $env:GITHUB_PATH
+          }
         shell: pwsh
 
       - name: Build for ${{ matrix.target }}
