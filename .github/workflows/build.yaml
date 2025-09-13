@@ -61,6 +61,7 @@ jobs:
         run: |
           if ("${{ matrix.target }}" -eq "i686-pc-windows-gnu") {
             echo "C:\\msys64\\mingw32\\bin" >> $env:GITHUB_PATH
+            rustup update
           } else {
             echo "C:\\msys64\\mingw64\\bin" >> $env:GITHUB_PATH
           }
