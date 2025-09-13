@@ -56,6 +56,11 @@ jobs:
           rustc --version --verbose
           rustup show
 
+      - name: Install MinGW
+        run: |
+          choco install mingw --no-progress --yes
+          echo "C:\tools\mingw64\bin" >> $GITHUB_PATH
+
       - name: Build for ${{ matrix.target }}
         run: cargo build --release --target=${{ matrix.target }}
 
