@@ -44,13 +44,17 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4.2.2
 
-      - name: Install Rust nightly
-        run: |
-          rustup toolchain install nightly --profile minimal --target ${{ matrix.target }}
-          rustup default nightly
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.87.0
+          target: ${{ matrix.target }}
+          default: true
+          override: true
 
       - name: Check rustc version
-        run: rustc --version --verbose
+        run: |
+          rustc --version --verbose
+          rustup show
 
       - name: Build for ${{ matrix.target }}
         run: cargo build --release --target=${{ matrix.target }}
