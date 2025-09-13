@@ -57,18 +57,17 @@ jobs:
           update: true
           install: mingw-w64-i686-gcc mingw-w64-x86_64-gcc
 
+      - name: Debug PATH
+        run: |
+          Get-ChildItem -Path "C:\msys64" -Recurse -Directory | Select-String "mingw"
+
       - name: Add MinGW to PATH
         run: |
           echo "C:\msys64\mingw32\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         shell: pwsh
 
-      - name: Debug PATH
-        run: |
-          Get-ChildItem -Path "C:\msys64" -Recurse -Directory | Select-String "mingw"
-
       - name: Build for ${{ matrix.target }}
-        shell: msys2 {0}
         run: cargo build --release --target=${{ matrix.target }}
 
       - name: Rename output DLL
