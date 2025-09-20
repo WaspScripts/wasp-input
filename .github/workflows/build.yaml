@@ -39,7 +39,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        target: [i686-pc-windows-gnu, x86_64-pc-windows-gnu]
+        target: [i686-pc-windows-msvc, x86_64-pc-windows-msvc]
 
     steps:
       - name: Checkout source
@@ -51,22 +51,6 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
-      - name: Install MSYS2 and MinGW-w64
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: ${{ matrix.target == 'i686-pc-windows-gnu' && 'mingw-w64-i686-gcc' || 'mingw-w64-x86_64-gcc' }}
-
-      - name: Add MinGW to PATH
-        run: |
-          if ("${{ matrix.target }}" -eq "i686-pc-windows-gnu") {
-            echo "C:\\msys64\\mingw32\\bin" >> $env:GITHUB_PATH
-            rustup update
-          } else {
-            echo "C:\\msys64\\mingw64\\bin" >> $env:GITHUB_PATH
-          }
-        shell: pwsh
-
       - name: Build for ${{ matrix.target }}
         run: cargo build --release --target=${{ matrix.target }}
 
@@ -75,7 +59,7 @@ jobs:
           $target = "${{ matrix.target }}"
           $original = "target\$target\release\$env:PROJECT_NAME.dll"
 
-          if ($target -eq "i686-pc-windows-gnu") {
+          if ($target -eq "i686-pc-windows-msvc") {
             $renamed = "target\$target\release\$env:NAME_WIN32"
           } else {
             $renamed = "target\$target\release\$env:NAME_WIN64"
@@ -95,7 +79,7 @@ jobs:
         with:
           name: ${{ matrix.target }}-dll
           path: |
-            target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-gnu' && env.NAME_WIN32 || env.NAME_WIN64 }}
+            target/${{ matrix.target }}/release/${{ matrix.target == 'i686-pc-windows-msvc' && env.NAME_WIN32 || env.NAME_WIN64 }}
 
   version:
     needs: build
@@ -137,7 +121,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create ${{ env.TAG_NAME }} \
-            artifacts/i686-pc-windows-gnu-dll/${{ env.NAME_WIN32 }} \
-            artifacts/x86_64-pc-windows-gnu-dll/${{ env.NAME_WIN64 }} \
+            artifacts/i686-pc-windows-msvc-dll/${{ env.NAME_WIN32 }} \
+            artifacts/x86_64-pc-windows-msvc-dll/${{ env.NAME_WIN64 }} \
             --title "${{ env.TAG_NAME }}" \
             --notes "Automated plugin release"
