@@ -217,9 +217,9 @@ pub extern "system" fn SimbaPluginTarget_MousePressed(
     let _lock = TARGETS.lock().unwrap();
     let target = unsafe { &*target };
     match mouse_button {
-        1 => target.keyboard[0],
-        2 | 4 | 5 => target.keyboard[1],
-        3 => target.keyboard[2],
+        1 => target.mouse[0],
+        2 | 4 | 5 => target.mouse[1],
+        3 => target.mouse[2],
         _ => {
             println!("[WaspInput]: Unknown mouse button: {}\r\n", mouse_button);
             false
@@ -264,6 +264,15 @@ pub extern "system" fn SimbaPluginTarget_MouseTeleport(
     let target = unsafe { &*target };
 
     mouse_move(target.hwnd, x, y);
+
+    // Stored right away so a position read doesn't return the old point before the client
+    // processes the posted WM_MOUSEMOVE.
+    let mem_manager = MEMORY_MANAGER
+        .get()
+        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .lock()
+        .unwrap();
+    unsafe { mem_manager.set_mouse_position(x, y) };
 }
 
 #[no_mangle]

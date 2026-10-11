@@ -3,8 +3,12 @@ use lazy_static::lazy_static;
 use retour::GenericDetour;
 use std::{
     ffi::c_void,
+    panic::{catch_unwind, AssertUnwindSafe},
     ptr::null_mut,
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicIsize, Ordering},
+        Mutex, OnceLock,
+    },
 };
 
 use std::char::from_u32;
@@ -12,7 +16,7 @@ use std::char::from_u32;
 use windows::{
     core::{BOOL, PCSTR},
     Win32::{
-        Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
             Gdi::HDC,
             OpenGL::{glGetIntegerv, GL_VIEWPORT},
@@ -26,9 +30,9 @@ use windows::{
                 GetKeyboardState, MapVirtualKeyA, MapVirtualKeyW, ToUnicode, MAPVK_VK_TO_VSC,
             },
             WindowsAndMessaging::{
-                GetWindowLongPtrW, IsWindowVisible, ShowWindow, GWLP_WNDPROC, SW_HIDE,
-                SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT, WM_KEYDOWN, WM_KEYUP,
-                WM_KILLFOCUS, WM_MOUSEMOVE,
+                CallWindowProcW, GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, ShowWindow,
+                GWLP_WNDPROC, SW_HIDE, SW_SHOWNORMAL, WM_CHAR, WM_IME_NOTIFY, WM_IME_SETCONTEXT,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_MOUSEMOVE, WNDPROC,
             },
         },
     },
@@ -64,9 +68,19 @@ pub unsafe fn open_client_console() {
 }
 
 //WndProc hook
-static ORIGINAL_WNDPROC: OnceLock<
-    GenericDetour<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>,
-> = OnceLock::new();
+// The window is subclassed instead of detouring its WndProc: under Wine GetWindowLongPtrW can
+// return a handle rather than a function pointer, which only CallWindowProcW understands.
+static HOOKED_HWND: AtomicIsize = AtomicIsize::new(0);
+static ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+
+fn hooked_wndproc_address() -> isize {
+    hooked_wndproc as *const () as isize
+}
+
+unsafe fn call_original(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let original: WNDPROC = std::mem::transmute(ORIGINAL_WNDPROC.load(Ordering::SeqCst));
+    CallWindowProcW(original, hwnd, msg, wparam, lparam)
+}
 
 fn get_modifier_lparam(key: i32, down: bool) -> LPARAM {
     let scancode = unsafe { MapVirtualKeyA(key as u32, MAPVK_VK_TO_VSC) };
@@ -136,8 +150,6 @@ unsafe extern "system" fn hooked_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let original = ORIGINAL_WNDPROC.get().unwrap();
-
     match msg {
         WI_CONSOLE => {
             open_client_console();
@@ -151,19 +163,19 @@ unsafe extern "system" fn hooked_wndproc(
             if nshift {
                 let msg = if *shift { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x10, !*shift);
-                let _ = original.call(hwnd, msg, WPARAM(0x10), lparam);
+                let _ = call_original(hwnd, msg, WPARAM(0x10), lparam);
             }
 
             if nctrl {
                 let msg = if *ctrl { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x11, !*ctrl);
-                let _ = original.call(hwnd, msg, WPARAM(0x11), lparam);
+                let _ = call_original(hwnd, msg, WPARAM(0x11), lparam);
             }
 
             if nalt {
                 let msg = if *alt { WM_KEYUP } else { WM_KEYDOWN };
                 let lparam = get_modifier_lparam(0x12, !*alt);
-                let _ = original.call(hwnd, msg, WPARAM(0x12), lparam);
+                let _ = call_original(hwnd, msg, WPARAM(0x12), lparam);
             }
 
             if nshift {
@@ -212,7 +224,7 @@ unsafe extern "system" fn hooked_wndproc(
                     new_wparam, lparam
                 );
 
-                return original.call(hwnd, msg, new_wparam, lparam);
+                return call_original(hwnd, msg, new_wparam, lparam);
             }
 
             WM_CHAR
@@ -236,44 +248,40 @@ unsafe extern "system" fn hooked_wndproc(
         _ => msg,
     };
 
-    original.call(hwnd, msg, wparam, lparam)
+    call_original(hwnd, msg, wparam, lparam)
 }
 
 unsafe fn hook_wndproc(hwnd: u64) {
-    let original_proc = GetWindowLongPtrW(HWND(hwnd as *mut c_void), GWLP_WNDPROC) as *const ();
-    if original_proc.is_null() {
-        panic!("Failed to get WndProc: {:?}", GetLastError());
+    let hwnd = HWND(hwnd as *mut c_void);
+    HOOKED_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    let current = GetWindowLongPtrW(hwnd, GWLP_WNDPROC) as isize;
+    if current == hooked_wndproc_address() {
+        return;
     }
 
-    let detour =
-        GenericDetour::<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>::new(
-            std::mem::transmute(original_proc),
-            hooked_wndproc,
-        )
-        .expect("[WaspInput]: Failed to create WndProc hook.\r\n");
-
-    detour
-        .enable()
-        .expect("[WaspInput]: Failed to enable WndProc hook.\r\n");
-
-    if ORIGINAL_WNDPROC.get().is_none() {
-        ORIGINAL_WNDPROC
-            .set(detour)
-            .expect("[WaspInput]: Failed to save original WndProc function.\r\n");
+    // Saved before swapping so messages that arrive right after the swap can be forwarded.
+    ORIGINAL_WNDPROC.store(current, Ordering::SeqCst);
+    let previous = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, hooked_wndproc_address() as _) as isize;
+    if previous == 0 {
+        panic!("[WaspInput]: Failed to hook WndProc.\r\n");
     }
+    ORIGINAL_WNDPROC.store(previous, Ordering::SeqCst);
 
     println!("[WaspInput]: WndProc successfully hooked.\r\n");
 }
 
 pub unsafe fn unhook_wndproc() {
-    let detour = ORIGINAL_WNDPROC
-        .get()
-        .expect("[WaspInput]: WndProc hook not found.\r\n");
+    let hwnd = HWND(HOOKED_HWND.load(Ordering::SeqCst) as *mut c_void);
+    if GetWindowLongPtrW(hwnd, GWLP_WNDPROC) as isize != hooked_wndproc_address() {
+        return;
+    }
 
-    detour
-        .disable()
-        .expect("[WaspInput]: Failed to disable WndProc hook\r\n");
-
+    SetWindowLongPtrW(
+        hwnd,
+        GWLP_WNDPROC,
+        ORIGINAL_WNDPROC.load(Ordering::SeqCst) as _,
+    );
     println!("[WaspInput]: WndProc successfully unhooked.\r\n");
 }
 
@@ -332,13 +340,16 @@ unsafe fn hook_wgl_swap_buffers() {
     let detour = GenericDetour::new(original_fn, hooked_wgl_swap_buffers)
         .expect("[WaspInput]: Failed to create wglSwapBuffers hook.\r\n");
 
-    detour
-        .enable()
-        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook.\r\n");
-
+    // Saved before enabling, since the render thread can call the hook right away.
     ORIGINAL_WGL_SWAPBUFFERS
         .set(detour)
         .expect("[WaspInput]: Failed to save original wglSwapBuffers function.\r\n");
+
+    ORIGINAL_WGL_SWAPBUFFERS
+        .get()
+        .unwrap()
+        .enable()
+        .expect("[WaspInput]: Failed to enable wglSwapBuffers hook.\r\n");
 
     println!("[WaspInput]: wglSwapBuffers successfully hooked.\r\n");
 }
@@ -373,20 +384,23 @@ pub unsafe fn reenable_hooks() {
         .enable()
         .expect("[WaspInput]: Failed to enable wglSwapBuffers hook.\r\n");
 
-    let wndproc_detour = ORIGINAL_WNDPROC
-        .get()
-        .expect("[WaspInput]: WndProc hook not found\r\n");
-
-    wndproc_detour
-        .enable()
-        .expect("[WaspInput]: Failed to enable WndProc hook.\r\n");
+    hook_wndproc(HOOKED_HWND.load(Ordering::SeqCst) as u64);
 }
 pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
-    let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map()));
+    let hwnd = lparam as u64;
 
-    hook_wndproc(lparam as u64);
-    hook_wgl_swap_buffers();
+    // A panic can't unwind out of this thread's entry point and would abort the whole client.
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map()));
 
-    event_listener(lparam as u64);
+        hook_wndproc(hwnd);
+        hook_wgl_swap_buffers();
+
+        event_listener(hwnd);
+    }));
+
+    if result.is_err() {
+        println!("[WaspInput]: Failed to start, wasp-input is inactive in this client.\r\n");
+    }
     0
 }

@@ -14,9 +14,12 @@ use gl::{
 
 use windows::{
     core::PCSTR,
-    Win32::Graphics::OpenGL::{
-        glBindTexture, glDrawArrays, glGenTextures, glPointSize, glReadPixels, glTexParameteri,
-        glTexSubImage2D, glViewport, wglGetProcAddress,
+    Win32::{
+        Graphics::OpenGL::{
+            glBindTexture, glDrawArrays, glGenTextures, glPointSize, glReadPixels,
+            glTexParameteri, glTexSubImage2D, glViewport, wglGetProcAddress,
+        },
+        System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
     },
 };
 
@@ -101,10 +104,18 @@ pub unsafe fn load_opengl_extensions() -> bool {
     let load_fn = |name: &str| -> *const c_void {
         let cname = CString::new(name).unwrap();
         let pcstr = PCSTR(cname.as_ptr() as *const u8);
+        // wglGetProcAddress only has to return extension and post-1.1 functions, and some drivers
+        // signal failure with 1, 2, 3 or -1 instead of NULL. Wine follows the spec, so GL 1.1
+        // functions like glBindTexture have to come from opengl32.dll's exports.
         match wglGetProcAddress(pcstr) {
-            Some(f) => f as *const c_void,
-
-            None => null(),
+            Some(f) if !matches!(f as isize, -1 | 0..=3) => f as *const c_void,
+            _ => match GetModuleHandleA(PCSTR(b"opengl32.dll\0".as_ptr())) {
+                Ok(module) => match GetProcAddress(module, pcstr) {
+                    Some(f) => f as *const c_void,
+                    None => null(),
+                },
+                Err(_) => null(),
+            },
         }
     };
 
