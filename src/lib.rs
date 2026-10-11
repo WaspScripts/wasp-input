@@ -58,15 +58,19 @@ pub extern "system" fn Inject(path: *const c_char, pid: u32) -> bool {
         }
     };
 
-    let new_target = SimbaTarget {
-        pid,
-        hwnd,
-        keyboard: [false; 255],
-        mouse: [false; 3],
-    };
-
+    // An existing target is updated in place, since Simba may still hold a pointer to it.
     let mut targets = TARGETS.lock().unwrap();
-    targets.insert(pid, new_target);
+    targets
+        .entry(pid)
+        .and_modify(|target| target.hwnd = hwnd)
+        .or_insert_with(|| {
+            Box::new(SimbaTarget {
+                pid,
+                hwnd,
+                keyboard: [false; 255],
+                mouse: [false; 3],
+            })
+        });
 
     unsafe { inject(module_path, pid) }
 }

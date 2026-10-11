@@ -27,6 +27,7 @@ pub struct SharedMemory {
     pub mouse_y: i32,
     pub width: i32,
     pub height: i32,
+    pub overlay_enabled: u8,
     pub img: [u8; IMAGE_DATA_SIZE],
     pub overlay: [u8; IMAGE_DATA_SIZE],
 }
@@ -64,6 +65,7 @@ impl MemoryManager {
         (*ptr).mouse_y = -1;
         (*ptr).width = -1;
         (*ptr).height = -1;
+        (*ptr).overlay_enabled = 0;
         copy_nonoverlapping(VERSION.as_ptr(), (*ptr).version.as_mut_ptr(), 7);
 
         Self { ptr, hmap }
@@ -140,6 +142,14 @@ impl MemoryManager {
             let overlay_ptr = &mut (*self.ptr).overlay as *mut [u8; IMAGE_DATA_SIZE] as *mut u8;
             write_bytes(overlay_ptr, 0, IMAGE_DATA_SIZE);
         }
+    }
+
+    pub unsafe fn overlay_enabled(&self) -> bool {
+        (*self.ptr).overlay_enabled != 0
+    }
+
+    pub unsafe fn set_overlay_enabled(&self, enabled: bool) {
+        (*self.ptr).overlay_enabled = enabled as u8;
     }
 
     pub unsafe fn get_mouse_position(&self) -> (i32, i32) {

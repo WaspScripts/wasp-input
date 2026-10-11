@@ -30,7 +30,9 @@ pub struct SimbaTarget {
 }
 
 lazy_static! {
-    pub static ref TARGETS: Mutex<HashMap<u32, SimbaTarget>> = Mutex::new(HashMap::new());
+    // Boxed because Simba keeps the pointer Request returns, and the map moves its values when it
+    // grows.
+    pub static ref TARGETS: Mutex<HashMap<u32, Box<SimbaTarget>>> = Mutex::new(HashMap::new());
 }
 
 pub fn get_mouse_pos(hwnd: u64) -> POINT {
@@ -67,10 +69,8 @@ pub extern "system" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut Si
     let hwnd = get_jagrenderview(pid).expect("[WaspInput]: Failed to find JagRenderView HWND.\r\n");
     call_event(hwnd.0 as u64);
 
-    let _ = MEMORY_MANAGER.set(Mutex::new(unsafe { MemoryManager::open_map(5000) }));
     let mem_manager = MEMORY_MANAGER
-        .get()
-        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+        .get_or_init(|| Mutex::new(unsafe { MemoryManager::open_map(5000) }))
         .lock()
         .unwrap();
 
@@ -79,7 +79,7 @@ pub extern "system" fn SimbaPluginTarget_Request(args: *const c_char) -> *mut Si
     let mut targets = TARGETS.lock().unwrap();
 
     if let Some(target) = targets.get_mut(&pid) {
-        return target as *mut SimbaTarget;
+        return &mut **target as *mut SimbaTarget;
     } else {
         panic!("[WaspInput]: The specified target hasn't been injected.\r\n");
     }
@@ -117,6 +117,7 @@ pub extern "system" fn SimbaPluginTarget_RequestWithDebugImage(
             let img = external_image_create(true);
             *overlay = img;
             external_image_set_memory(*overlay, mem_manager.overlay_ptr() as *mut c_void, w, h);
+            mem_manager.set_overlay_enabled(true);
         }
     }
 
@@ -131,6 +132,10 @@ pub extern "system" fn SimbaPluginTarget_Release(target: *mut SimbaTarget) {
 
     let mut targets = TARGETS.lock().unwrap();
     let target = unsafe { &*target };
+
+    if let Some(mem_manager) = MEMORY_MANAGER.get() {
+        unsafe { mem_manager.lock().unwrap().set_overlay_enabled(false) };
+    }
 
     if let Some(removed) = targets.remove(&target.pid) {
         println!(
@@ -403,9 +408,12 @@ pub extern "system" fn SimbaPluginTarget_KeySend(
         return;
     }
 
-    let _lock = TARGETS.lock().unwrap();
-    let target = unsafe { &*target };
-    keys_send(target.hwnd, text, len, sleeptimes);
+    // keys_send sleeps between keys, so the lock isn't held while it types.
+    let hwnd = {
+        let _lock = TARGETS.lock().unwrap();
+        unsafe { (*target).hwnd }
+    };
+    keys_send(hwnd, text, len, sleeptimes);
 }
 
 #[no_mangle]

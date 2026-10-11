@@ -7,7 +7,8 @@ use std::{
 
 use gl::{
     types::{GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLuint, GLvoid},
-    BGRA, CLAMP_TO_EDGE, FRAGMENT_SHADER, LINEAR, PIXEL_PACK_BUFFER, POINTS, READ_ONLY, RGBA8,
+    BGRA, CLAMP_TO_EDGE, FRAGMENT_SHADER, LINEAR, PIXEL_PACK_BUFFER, PIXEL_PACK_BUFFER_BINDING,
+    POINTS, READ_ONLY, RGBA8,
     STREAM_READ, TEXTURE0, TEXTURE_2D, TEXTURE_MAG_FILTER, TEXTURE_MIN_FILTER, TEXTURE_WRAP_S,
     TEXTURE_WRAP_T, TRIANGLE_STRIP, UNSIGNED_BYTE, VERTEX_SHADER,
 };
@@ -16,8 +17,9 @@ use windows::{
     core::PCSTR,
     Win32::{
         Graphics::OpenGL::{
-            glBindTexture, glDrawArrays, glGenTextures, glPointSize, glReadPixels,
-            glTexParameteri, glTexSubImage2D, glViewport, wglGetProcAddress,
+            glBindTexture, glDeleteTextures, glDrawArrays, glGenTextures, glGetIntegerv,
+            glPointSize, glReadPixels, glTexParameteri, glTexSubImage2D, glViewport,
+            wglGetProcAddress,
         },
         System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
     },
@@ -88,7 +90,6 @@ static GL_GET_UNIFORM_LOCATION: OnceLock<GLGetUniformLocationFn> = OnceLock::new
 static POINT_SHADER: OnceLock<GLuint> = OnceLock::new();
 static VAO: OnceLock<GLuint> = OnceLock::new();
 static OVERLAY_SHADER: OnceLock<GLuint> = OnceLock::new();
-static TEXTURE: OnceLock<GLuint> = OnceLock::new();
 
 pub fn restore_state(prev_program: i32, prev_vao: i32) {
     let use_program = *GL_USE_PROGRAM.get().unwrap();
@@ -193,6 +194,12 @@ pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
 
     let row_stride = (width * 4) as usize;
 
+    let mut prev_pbo: GLint = 0;
+    unsafe { glGetIntegerv(PIXEL_PACK_BUFFER_BINDING, &mut prev_pbo) };
+
+    // Freshly allocated PBOs hold no frame yet, so the other one isn't mapped this time.
+    let mut skip_map = false;
+
     if pbos[0] == 0 {
         let gl_gen_buffers = *GL_GEN_BUFFERS.get().unwrap();
         let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
@@ -206,6 +213,7 @@ pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
         }
 
         *old_size = size;
+        skip_map = true;
     } else if *old_size != size {
         let gl_buffer_data = *GL_BUFFER_DATA.get().unwrap();
         unsafe {
@@ -216,6 +224,7 @@ pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
         }
 
         *old_size = size;
+        skip_map = true;
     }
 
     let read_index = *index;
@@ -227,20 +236,25 @@ pub fn read_frame(width: i32, height: i32, size: i32, dest: *mut u8) {
         glReadPixels(0, 0, width, height, BGRA, UNSIGNED_BYTE, null_mut());
 
         // Map the previous frame's PBO to read its contents
-        gl_bind_buffer(PIXEL_PACK_BUFFER, pbos[map_index]);
-        let ptr = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY) as *const u8;
+        if !skip_map {
+            gl_bind_buffer(PIXEL_PACK_BUFFER, pbos[map_index]);
+            let ptr = gl_map_buffer(PIXEL_PACK_BUFFER, READ_ONLY) as *const u8;
 
-        if !ptr.is_null() {
-            for row in 0..height as usize {
-                let src_row = ptr.add(row * row_stride);
-                let dest_row = dest.add((height as usize - 1 - row) * row_stride);
-                copy_nonoverlapping(src_row, dest_row, row_stride);
+            if !ptr.is_null() {
+                for row in 0..height as usize {
+                    let src_row = ptr.add(row * row_stride);
+                    let dest_row = dest.add((height as usize - 1 - row) * row_stride);
+                    copy_nonoverlapping(src_row, dest_row, row_stride);
+                }
+
+                gl_unmap_buffer(PIXEL_PACK_BUFFER); // Optional but recommended
             }
-
-            gl_unmap_buffer(PIXEL_PACK_BUFFER); // Optional but recommended
         }
 
         *index = map_index; // Swap indices
+
+        // Left bound, the client's own glReadPixels calls would write into our PBO.
+        gl_bind_buffer(PIXEL_PACK_BUFFER, prev_pbo as GLuint);
     }
 }
 
@@ -310,7 +324,30 @@ fn init_gl_resources_overlay() {
     }
 }
 
-fn init_gl_texture(width: i32, height: i32) {
+lazy_static! {
+    static ref TEXTURE_DATA: Mutex<(GLuint, i32, i32)> = Mutex::new((0, 0, 0)); //(texture, width, height)
+}
+
+// glTexStorage2D textures can't be resized, so a new one is made whenever the frame size changes.
+fn get_gl_texture(width: i32, height: i32) -> GLuint {
+    let mut texture_data = TEXTURE_DATA.lock().unwrap();
+    let (ref mut texture, ref mut old_width, ref mut old_height) = *texture_data;
+
+    if *texture != 0 && *old_width == width && *old_height == height {
+        return *texture;
+    }
+
+    if *texture != 0 {
+        unsafe { glDeleteTextures(1, texture) };
+    }
+
+    *texture = init_gl_texture(width, height);
+    *old_width = width;
+    *old_height = height;
+    *texture
+}
+
+fn init_gl_texture(width: i32, height: i32) -> GLuint {
     let gl_tex_storage_2d = *GL_TEX_STORAGE_2D.get().unwrap();
     let mut texture: GLuint = 0;
     unsafe {
@@ -322,27 +359,26 @@ fn init_gl_texture(width: i32, height: i32) {
         glTexParameteri(TEXTURE_2D, TEXTURE_WRAP_T, CLAMP_TO_EDGE as i32);
         gl_tex_storage_2d(TEXTURE_2D, 1, RGBA8, width, height);
     };
-    TEXTURE.set(texture).unwrap();
+    texture
 }
 
 pub fn draw_overlay(width: i32, height: i32, src: *const u8) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
     if OVERLAY_SHADER.get().is_none() {
         init_gl_resources_overlay();
     }
 
-    if TEXTURE.get().is_none() {
-        init_gl_texture(width, height);
-    }
+    let texture = get_gl_texture(width, height);
 
     let use_program = *GL_USE_PROGRAM.get().unwrap();
     let active_texture = *GL_ACTIVE_TEXTURE.get().unwrap();
     let bind_texture = *GL_BIND_TEXTURE.get().unwrap();
-    let uniform_1i = *GL_UNIFORM_1I.get().unwrap();
-    let get_uniform_location = *GL_GET_UNIFORM_LOCATION.get().unwrap();
     let bind_vertex_array = *GL_BIND_VERTEX_ARRAY.get().unwrap();
 
     let program = *OVERLAY_SHADER.get().unwrap();
-    let texture = *TEXTURE.get().unwrap();
     let vao = *VAO.get().unwrap();
 
     // Upload new data every frame
@@ -363,9 +399,8 @@ pub fn draw_overlay(width: i32, height: i32, src: *const u8) {
 
         use_program(program);
         active_texture(TEXTURE0);
+        // screenTex is left at its default of texture unit 0.
         bind_texture(TEXTURE_2D, texture);
-        let name = CString::new("screenTex").unwrap();
-        uniform_1i(get_uniform_location(program, name.as_ptr()), 0);
 
         bind_vertex_array(vao);
         glDrawArrays(TRIANGLE_STRIP, 0, 4);

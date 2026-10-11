@@ -290,14 +290,7 @@ static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" f
     OnceLock::new();
 
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
-    let mem_manager = MEMORY_MANAGER
-        .get()
-        .expect("[WaspInput]: Memory manager is not initialized!\r\n")
-        .lock()
-        .unwrap();
     let mut viewport = [0, 0, 0, 0];
-    let mouse = mem_manager.get_mouse_position();
-
     glGetIntegerv(GL_VIEWPORT, viewport.as_mut_ptr());
     // Save current state
     let mut prev_program: i32 = 0;
@@ -309,14 +302,26 @@ unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let height = viewport[3];
     let frame_size = width * height * 4;
 
-    mem_manager.set_dimensions(width, height);
+    // The lock is released before the frame copy so WM_MOUSEMOVE in the wndproc isn't held up.
+    let (mouse, dest, overlay) = {
+        let mem_manager = MEMORY_MANAGER
+            .get()
+            .expect("[WaspInput]: Memory manager is not initialized!\r\n")
+            .lock()
+            .unwrap();
+        mem_manager.set_dimensions(width, height);
+        let overlay = mem_manager
+            .overlay_enabled()
+            .then(|| mem_manager.overlay_ptr());
+        (mem_manager.get_mouse_position(), mem_manager.image_ptr(), overlay)
+    };
 
     if load_opengl_extensions() {
-        let dest = mem_manager.image_ptr();
         read_frame(width, height, frame_size, dest);
 
-        let overlay = mem_manager.overlay_ptr();
-        draw_overlay(width, height, overlay);
+        if let Some(overlay) = overlay {
+            draw_overlay(width, height, overlay);
+        }
 
         if (mouse.0 > -1) && (mouse.1 > -1) && (mouse.0 < width) && (mouse.1 < height) {
             draw_point(mouse.0, mouse.1, width, height);
